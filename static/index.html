@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Multifamily Underwriter</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="toolbar">
+        <div class="title-block">
+          <p class="eyebrow">Local Analysis Workspace</p>
+          <h1>Multifamily Underwriter</h1>
+          <p class="subtitle">Scenario modeling with structured inputs and live underwriting outputs.</p>
+        </div>
+        <div class="toolbar-actions">
+          <button id="calculate-btn" class="btn btn-primary">Run Analysis</button>
+          <button id="reset-btn" class="btn">Reset Defaults</button>
+        </div>
+        <div id="status" class="status">Loading workbook...</div>
+      </header>
+
+      <section id="global-metrics" class="global-metrics" aria-label="Model summary"></section>
+      <nav id="sheet-tabs" class="sheet-tabs" aria-label="Workbook tabs"></nav>
+      <section id="sheet-panels" class="sheet-panels"></section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
