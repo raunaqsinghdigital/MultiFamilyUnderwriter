@@ -16,6 +16,12 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.request import urlopen
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicNumbers, SECP256R1
+from cryptography.hazmat.backends import default_backend
 
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -36,6 +42,7 @@ CELL_REF_RE = re.compile(r"^\$?([A-Z]{1,3})\$?([0-9]+)$")
 
 # ── Auth / CORS ────────────────────────────────────────────────────────────────
 SUPABASE_JWT_SECRET: str = os.environ.get("SUPABASE_JWT_SECRET", "")
+_jwks_cache: dict | None = None  # { kid: jwk_dict } — populated on first ES256 verification
 _ALLOWED_ORIGINS_RAW: str = os.environ.get("ALLOWED_ORIGINS", "")
 _DEFAULT_ALLOWED_ORIGINS: set[str] = (
     {o.strip() for o in _ALLOWED_ORIGINS_RAW.split(",") if o.strip()}
@@ -49,14 +56,68 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * padding)
 
 
-def _verify_supabase_jwt(token: str) -> dict | None:
-    """Verify a Supabase HS256 JWT using stdlib only. Returns payload or None."""
-    if not SUPABASE_JWT_SECRET:
-        return None
+def _get_jwks(issuer: str) -> dict:
+    """Fetch Supabase JWKS and cache by kid. issuer = JWT 'iss' claim."""
+    global _jwks_cache
+    if _jwks_cache is not None:
+        return _jwks_cache
+    jwks_url = issuer.rstrip("/") + "/.well-known/jwks.json"
+    with urlopen(jwks_url, timeout=5) as resp:
+        keys = json.loads(resp.read())["keys"]
+    _jwks_cache = {k["kid"]: k for k in keys}
+    return _jwks_cache
+
+
+def _verify_es256_jwt(token: str) -> dict | None:
+    """Verify an ES256 JWT using Supabase JWKS. Returns payload or None."""
     try:
         parts = token.split(".")
         if len(parts) != 3:
             return None
+        header_b64, payload_b64, sig_b64 = parts
+        header = json.loads(_b64url_decode(header_b64))
+        kid = header.get("kid")
+        payload = json.loads(_b64url_decode(payload_b64))
+        issuer = payload.get("iss", "")
+        if not issuer or not kid:
+            return None
+        jwks = _get_jwks(issuer)
+        jwk = jwks.get(kid)
+        if not jwk:
+            return None
+        x = int.from_bytes(_b64url_decode(jwk["x"]), "big")
+        y = int.from_bytes(_b64url_decode(jwk["y"]), "big")
+        pub_key = EllipticCurvePublicNumbers(x, y, SECP256R1()).public_key(default_backend())
+        sig_bytes = _b64url_decode(sig_b64)
+        r = int.from_bytes(sig_bytes[:32], "big")
+        s = int.from_bytes(sig_bytes[32:], "big")
+        der_sig = encode_dss_signature(r, s)
+        pub_key.verify(der_sig, f"{header_b64}.{payload_b64}".encode(), ec.ECDSA(hashes.SHA256()))
+        if payload.get("exp", 0) < time.time():
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def _verify_supabase_jwt(token: str) -> dict | None:
+    """Verify a Supabase JWT (ES256 or HS256). Returns payload or None."""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        header = json.loads(_b64url_decode(parts[0]))
+        alg = header.get("alg", "HS256")
+    except Exception:
+        return None
+
+    if alg == "ES256":
+        return _verify_es256_jwt(token)
+
+    # HS256 path (legacy Supabase projects)
+    if not SUPABASE_JWT_SECRET:
+        return None
+    try:
         header_b64, payload_b64, sig_b64 = parts
         expected = hmac.new(
             SUPABASE_JWT_SECRET.encode(),
@@ -1479,7 +1540,8 @@ def main() -> None:
     )
 
     if not SUPABASE_JWT_SECRET:
-        print("WARNING: SUPABASE_JWT_SECRET is not set. All API requests will be rejected (401).")
+        print("WARNING: SUPABASE_JWT_SECRET is not set. HS256 JWT verification will fail. "
+              "(ES256/JWKS projects issued after Aug 2024 do not need this.)")
 
     server = UnderwriterServer((args.host, args.port), UnderwriterHandler, allowed_origins)
     print(f"Underwriter running at http://{args.host}:{args.port}")
