@@ -44,6 +44,10 @@ Authentication
 
 ## One-Time Setup
 
+> **Important — follow these steps in order.** Inviting users before deploying to Render causes invite emails to link to `localhost:3000` (Supabase's default), which will not work.
+
+---
+
 ### Step 1 — Create a Supabase Project
 
 1. Go to [supabase.com](https://supabase.com) → **New project**
@@ -74,15 +78,46 @@ Replace with your actual values from Step 1.
 
 ---
 
-### Step 3 — Create Users in Supabase
+### Step 3 — Deploy to Render
 
-1. Go to **Supabase Dashboard → Authentication → Users**
-2. Click **Invite user** → enter the email address
-3. Supabase sends an email invite; the user sets their own password
+1. Push this repo to GitHub (if not already done)
+2. Go to [render.com](https://render.com) → **New → Web Service**
+3. Connect your GitHub repo
+4. Render will auto-detect `render.yaml` and configure the service
+5. Click **Create Web Service**
+6. Once the service is created, go to the **Environment** tab and add:
+
+| Key | Value |
+|-----|-------|
+| `SUPABASE_JWT_SECRET` | Paste the JWT Secret from Supabase Step 1 |
+
+7. Click **Save Changes** — Render will redeploy automatically
+8. Note your live URL (e.g. `https://multifamily-underwriter.onrender.com`) — you need it in the next step
 
 ---
 
-### Step 4 — Assign Roles (admin or analyst)
+### Step 4 — Configure Supabase Redirect URL
+
+Before inviting users, Supabase must know where to redirect invite email links. Without this, invite emails link to `localhost:3000` (Supabase's default) and cannot be used.
+
+1. Go to **Supabase Dashboard → Authentication → URL Configuration**
+2. Set **Site URL** to your Render URL (e.g. `https://multifamily-underwriter.onrender.com`)
+3. Under **Redirect URLs**, add: `https://multifamily-underwriter.onrender.com/**`
+4. Click **Save**
+
+---
+
+### Step 5 — Create Users in Supabase
+
+1. Go to **Supabase Dashboard → Authentication → Users**
+2. Click **Invite user** → enter the email address
+3. Supabase sends an invite email; the user clicks the link and is taken to the app to set their password
+
+> **Note:** The invite link redirects to your Render URL (configured in Step 4). On first visit the app shows a "Set Your Password" screen — the user creates a password and is immediately taken into the workbook.
+
+---
+
+### Step 6 — Assign Roles (admin or analyst)
 
 Roles are stored in `app_metadata` (only the service role key can write this — users cannot change their own role).
 
@@ -111,24 +146,6 @@ curl -X PATCH \
 > **Security note:** Never expose the `service_role_key` in frontend code or commit it to git.
 
 After setting the role, the user must **sign out and sign back in** for the new role to appear in their JWT.
-
----
-
-### Step 5 — Deploy to Render
-
-1. Push this repo to GitHub (if not already done)
-2. Go to [render.com](https://render.com) → **New → Web Service**
-3. Connect your GitHub repo
-4. Render will auto-detect `render.yaml` and configure the service
-5. Click **Create Web Service**
-6. Once the service is created, go to the **Environment** tab and add:
-
-| Key | Value |
-|-----|-------|
-| `SUPABASE_JWT_SECRET` | Paste the JWT Secret from Supabase Step 1 |
-
-7. Click **Save Changes** — Render will redeploy automatically
-8. Your app is live at `https://multifamily-underwriter.onrender.com` (or similar)
 
 ---
 
@@ -193,7 +210,7 @@ https://www.ramavasa.com,https://ramavasa.com
 | Task | How |
 |------|-----|
 | Create a user | Supabase Dashboard → Authentication → Users → Invite user |
-| Set role to admin | `curl PATCH /auth/v1/admin/users/<uid>` with `app_metadata.role = "admin"` (see Step 4) |
+| Set role to admin | `curl PATCH /auth/v1/admin/users/<uid>` with `app_metadata.role = "admin"` (see Step 6) |
 | Set role to analyst | Same curl, with `"role": "analyst"` |
 | Remove a user | Supabase Dashboard → Authentication → Users → Delete |
 | User forgets password | Supabase Dashboard → Authentication → Users → Send reset email |
@@ -210,6 +227,8 @@ https://www.ramavasa.com,https://ramavasa.com
 | All API calls return 401 | `SUPABASE_JWT_SECRET` not set in Render | Add it in Render → Environment vars |
 | CORS blocked in browser console | `ALLOWED_ORIGINS` set but domain not in list | Add domain to `ALLOWED_ORIGINS` in Render env vars |
 | Supabase project paused | Free tier pauses after 1 week idle | Visit Supabase dashboard → click **Restore** |
+| Invite email links to localhost:3000 | Supabase Site URL not configured | Set Site URL in Auth → URL Configuration to your Render URL (Step 4) |
+| "OTP expired" when clicking invite link | Invite link used after Site URL was wrong; new invite needed | Fix Site URL (Step 4), then re-invite the user |
 
 ---
 
