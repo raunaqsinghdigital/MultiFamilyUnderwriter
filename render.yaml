@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: multifamily-underwriter
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python app.py"
+    envVars:
+      # Required: set this in the Render dashboard after first deploy
+      # Source: Supabase Dashboard → Project Settings → API → JWT Settings → JWT Secret
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+
+      # Optional: comma-separated list of allowed CORS origins
+      # Example: https://www.ramavasa.com,https://ramavasa.com
+      # Leave empty to allow all origins (suitable for direct browser access)
+      - key: ALLOWED_ORIGINS
+        value: ""

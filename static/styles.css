@@ -1692,3 +1692,193 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Login overlay ─────────────────────────────────────────────────────────── */
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background:
+    radial-gradient(circle at 8% -5%, rgba(15, 106, 191, 0.18) 0%, rgba(15, 106, 191, 0) 32%),
+    radial-gradient(circle at 90% 0%, rgba(242, 143, 59, 0.15) 0%, rgba(242, 143, 59, 0) 28%),
+    linear-gradient(170deg, #f6f9ff 0%, #eaf1f9 55%, #e5edf6 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 40px 44px 44px;
+  width: 100%;
+  max-width: 400px;
+}
+
+.login-brand {
+  margin-bottom: 28px;
+}
+
+.login-brand h2 {
+  margin: 6px 0 0;
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.login-subtitle {
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+  color: var(--ink-muted);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.login-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+
+.login-input {
+  width: 100%;
+  padding: 10px 13px;
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--panel-2);
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.login-input:focus {
+  outline: none;
+  border-color: var(--brand);
+  background: var(--panel);
+}
+
+.login-submit {
+  margin-top: 6px;
+  width: 100%;
+  padding: 11px;
+  font-size: 0.97rem;
+}
+
+.login-error {
+  margin: 4px 0 0;
+  font-size: 0.87rem;
+  color: #c0392b;
+  background: #fdf0ee;
+  border: 1px solid #f5c6c0;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+/* ── Product selector nav ──────────────────────────────────────────────────── */
+.product-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.product-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-radius: 30px;
+  border: 1.5px solid var(--line);
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--ink-muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.product-btn:hover:not(:disabled):not(.active) {
+  background: var(--panel);
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.product-btn.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  cursor: default;
+}
+
+.product-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.badge-soon {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(242, 143, 59, 0.15);
+  color: #b96a10;
+  border-radius: 20px;
+  padding: 2px 8px;
+}
+
+/* ── User chip ─────────────────────────────────────────────────────────────── */
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 5px 5px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 30px;
+}
+
+.user-email {
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 20px;
+  padding: 2px 9px;
+}
+
+.role-badge--admin {
+  background: rgba(15, 106, 191, 0.12);
+  color: var(--brand-2);
+}
+
+.role-badge--analyst {
+  background: rgba(79, 95, 121, 0.1);
+  color: var(--ink-muted);
+}
+
+.btn-sm {
+  padding: 5px 12px;
+  font-size: 0.8rem;
+}

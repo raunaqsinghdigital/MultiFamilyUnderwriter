@@ -1,0 +1,2 @@
+# No third-party Python dependencies — stdlib only.
+# This file exists so Render detects the project as Python.

@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import hmac
 import json
 import math
 import mimetypes
+import os
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,6 +33,44 @@ MANUAL_INPUT_CELL_OVERRIDES: dict[str, dict[str, str]] = {
 }
 
 CELL_REF_RE = re.compile(r"^\$?([A-Z]{1,3})\$?([0-9]+)$")
+
+# ── Auth / CORS ────────────────────────────────────────────────────────────────
+SUPABASE_JWT_SECRET: str = os.environ.get("SUPABASE_JWT_SECRET", "")
+_ALLOWED_ORIGINS_RAW: str = os.environ.get("ALLOWED_ORIGINS", "")
+_DEFAULT_ALLOWED_ORIGINS: set[str] = (
+    {o.strip() for o in _ALLOWED_ORIGINS_RAW.split(",") if o.strip()}
+    if _ALLOWED_ORIGINS_RAW.strip()
+    else set()
+)
+
+
+def _b64url_decode(s: str) -> bytes:
+    padding = 4 - len(s) % 4
+    return base64.urlsafe_b64decode(s + "=" * padding)
+
+
+def _verify_supabase_jwt(token: str) -> dict | None:
+    """Verify a Supabase HS256 JWT using stdlib only. Returns payload or None."""
+    if not SUPABASE_JWT_SECRET:
+        return None
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        header_b64, payload_b64, sig_b64 = parts
+        expected = hmac.new(
+            SUPABASE_JWT_SECRET.encode(),
+            f"{header_b64}.{payload_b64}".encode(),
+            hashlib.sha256,
+        ).digest()
+        if not hmac.compare_digest(_b64url_decode(sig_b64), expected):
+            return None
+        payload = json.loads(_b64url_decode(payload_b64))
+        if payload.get("exp", 0) < time.time():
+            return None
+        return payload
+    except Exception:
+        return None
 
 
 def now_iso() -> str:
@@ -1198,13 +1241,23 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        # Block cross-origin requests from non-whitelisted origins on API routes
+        if parsed.path.startswith("/api/") and self._cors_origin() == "":
+            self._send_json({"error": "Origin not allowed"}, status=403)
+            return
         if parsed.path == "/api/model":
+            user, blocked = self._require_auth()
+            if blocked:
+                return
             if self.state is None:
                 self._send_json({"error": "Server not initialized"}, status=500)
                 return
             self._send_json(self.state.get_public_model())
             return
         if parsed.path == "/api/admin/mortgage":
+            user, blocked = self._require_auth(required_role="admin")
+            if blocked:
+                return
             if self.state is None:
                 self._send_json({"error": "Server not initialized"}, status=500)
                 return
@@ -1214,8 +1267,17 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        # Block cross-origin requests from non-whitelisted origins
+        if self._cors_origin() == "":
+            self._send_json({"error": "Origin not allowed"}, status=403)
+            return
         if parsed.path not in {"/api/calculate", "/api/admin/mortgage-overrides"}:
             self._send_json({"error": "Not found"}, status=404)
+            return
+        # Auth gate
+        required_role = "admin" if parsed.path == "/api/admin/mortgage-overrides" else None
+        user, blocked = self._require_auth(required_role=required_role)
+        if blocked:
             return
         if self.state is None:
             self._send_json({"error": "Server not initialized"}, status=500)
@@ -1256,6 +1318,7 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
+        self._write_cors_headers()
         self.end_headers()
         self.wfile.write(payload)
 
@@ -1277,16 +1340,115 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mime_type or "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
+        self._write_cors_headers()
         self.end_headers()
         self.wfile.write(data)
+
+
+    # ── CORS helpers ──────────────────────────────────────────────────────────
+
+    def _cors_origin(self) -> str:
+        """Return the CORS origin to echo, '*' for open, '' if blocked.
+
+        - No Origin header  → same-origin / direct request → always ok (return '')
+          (we treat '' as "no CORS header needed", not blocked in this case — callers
+          handle the '' sentinel only when an Origin header *was* provided)
+        - Origin present + whitelist empty → public mode → return '*'
+        - Origin present + in whitelist    → return origin
+        - Origin present + NOT in whitelist → blocked → return sentinel '__blocked__'
+        """
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return ""  # same-origin; no CORS header needed
+        allowed: set[str] = getattr(self.server, "allowed_origins", set())
+        if not allowed:
+            return "*"
+        if origin in allowed:
+            return origin
+        return "__blocked__"
+
+    def _write_cors_headers(self) -> None:
+        """Write CORS headers if applicable. Call before end_headers()."""
+        cors = self._cors_origin()
+        if not cors or cors == "__blocked__":
+            return
+        self.send_header("Access-Control-Allow-Origin", cors)
+        if cors != "*":
+            self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+    def do_OPTIONS(self) -> None:
+        """Handle CORS preflight requests."""
+        cors = self._cors_origin()
+        if cors == "__blocked__":
+            self.send_response(403)
+            self.end_headers()
+            return
+        self.send_response(204)
+        if cors:
+            self.send_header("Access-Control-Allow-Origin", cors)
+            if cors != "*":
+                self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Access-Control-Max-Age", "86400")
+        self.end_headers()
+
+    # ── Auth helper ───────────────────────────────────────────────────────────
+
+    def _require_auth(
+        self, required_role: str | None = None
+    ) -> tuple[dict | None, bool]:
+        """Validate the Bearer token and optionally check role.
+
+        Returns (payload, False) on success, (None, True) after sending the
+        error response on failure.
+        """
+        auth_header = self.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            self._send_json({"error": "Authentication required"}, status=401)
+            return None, True
+        token = auth_header[len("Bearer "):]
+        payload = _verify_supabase_jwt(token)
+        if payload is None:
+            self._send_json({"error": "Invalid or expired token"}, status=401)
+            return None, True
+        if required_role:
+            role = payload.get("raw_app_meta_data", {}).get("role", "analyst")
+            if role != required_role:
+                self._send_json({"error": "Insufficient permissions"}, status=403)
+                return None, True
+        return payload, False
+
+    def log_message(self, fmt: str, *args: object) -> None:  # type: ignore[override]
+        pass  # Suppress default request logging noise
+
+
+class UnderwriterServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that carries CORS origin whitelist on the server object."""
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        RequestHandlerClass: type,
+        allowed_origins: set[str] | None = None,
+    ) -> None:
+        super().__init__(server_address, RequestHandlerClass)
+        self.allowed_origins: set[str] = allowed_origins or set()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Pure Python Multifamily Underwriter (no Excel dependency)"
     )
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
+    parser.add_argument(
+        "--allowed-origins",
+        default=os.environ.get("ALLOWED_ORIGINS", ""),
+        help="Comma-separated list of allowed CORS origins (empty = allow all)",
+    )
     parser.add_argument("--model", default=str(MODEL_PATH), help="Path to workbook model JSON")
     parser.add_argument(
         "--formulas",
@@ -1310,9 +1472,22 @@ def main() -> None:
     overrides_path = Path(args.overrides).expanduser()
     UnderwriterHandler.state = AppState(base_model=model, overrides_path=overrides_path)
 
-    server = ThreadingHTTPServer((args.host, args.port), UnderwriterHandler)
+    allowed_origins: set[str] = (
+        {o.strip() for o in args.allowed_origins.split(",") if o.strip()}
+        if args.allowed_origins.strip()
+        else set()
+    )
+
+    if not SUPABASE_JWT_SECRET:
+        print("WARNING: SUPABASE_JWT_SECRET is not set. All API requests will be rejected (401).")
+
+    server = UnderwriterServer((args.host, args.port), UnderwriterHandler, allowed_origins)
     print(f"Underwriter running at http://{args.host}:{args.port}")
     print("Calculation engine: pure Python (no Excel runtime dependency)")
+    if allowed_origins:
+        print(f"CORS: restricted to {', '.join(sorted(allowed_origins))}")
+    else:
+        print("CORS: open (no origin restrictions)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

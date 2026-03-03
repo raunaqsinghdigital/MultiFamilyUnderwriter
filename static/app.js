@@ -3,7 +3,130 @@ const calculateUrl = "/api/calculate";
 const adminMortgageUrl = "/api/admin/mortgage";
 const adminMortgageOverrideUrl = "/api/admin/mortgage-overrides";
 const PDF_REPORT_SHEET = "__pdf_report";
-const isAdminMode = new URLSearchParams(window.location.search).get("admin") === "1";
+
+// ── Supabase Auth ─────────────────────────────────────────────────────────────
+// Replace SUPABASE_URL and SUPABASE_ANON_KEY with your project values from:
+// Supabase Dashboard → Project Settings → API
+const SUPABASE_URL = "https://YOUR_PROJECT_REF.supabase.co";
+const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
+const { createClient } = supabase;
+const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let currentUser = null; // { email, role } — set after successful auth
+
+const isAdminMode = () => currentUser?.role === "admin";
+
+function authHeaders() {
+  const session = supabaseClient.auth.session ? supabaseClient.auth.session() : null;
+  const token = session?.access_token ?? "";
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+// Decode JWT payload (no signature verification — server handles that)
+function _decodeJwtPayload(token) {
+  try {
+    const b64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(b64));
+  } catch {
+    return null;
+  }
+}
+
+// ── Login / Logout UI ─────────────────────────────────────────────────────────
+function showLogin(msg = "") {
+  const overlay = document.getElementById("login-overlay");
+  const appShell = document.getElementById("app-shell");
+  const userChip = document.getElementById("user-chip");
+  if (overlay) overlay.removeAttribute("hidden");
+  if (appShell) appShell.setAttribute("hidden", "");
+  if (userChip) userChip.setAttribute("hidden", "");
+  if (msg) {
+    const errEl = document.getElementById("login-error");
+    if (errEl) { errEl.textContent = msg; errEl.removeAttribute("hidden"); }
+  }
+}
+
+function hideLogin() {
+  const overlay = document.getElementById("login-overlay");
+  const appShell = document.getElementById("app-shell");
+  const userChip = document.getElementById("user-chip");
+  if (overlay) overlay.setAttribute("hidden", "");
+  if (appShell) appShell.removeAttribute("hidden");
+  if (userChip) userChip.removeAttribute("hidden");
+  const errEl = document.getElementById("login-error");
+  if (errEl) { errEl.textContent = ""; errEl.setAttribute("hidden", ""); }
+}
+
+function setCurrentUser(accessToken) {
+  const payload = _decodeJwtPayload(accessToken);
+  if (!payload) return;
+  const role = payload?.raw_app_meta_data?.role ?? "analyst";
+  currentUser = { email: payload.email ?? "", role };
+  const emailEl = document.getElementById("user-email-display");
+  const badgeEl = document.getElementById("role-badge");
+  if (emailEl) emailEl.textContent = currentUser.email;
+  if (badgeEl) {
+    badgeEl.textContent = role === "admin" ? "Admin" : "Analyst";
+    badgeEl.className = `role-badge role-badge--${role}`;
+  }
+}
+
+async function handleLogin() {
+  const emailEl = document.getElementById("login-email");
+  const passwordEl = document.getElementById("login-password");
+  const loginBtn = document.getElementById("login-btn");
+  const errEl = document.getElementById("login-error");
+  const email = emailEl?.value.trim() ?? "";
+  const password = passwordEl?.value ?? "";
+  if (!email || !password) {
+    if (errEl) { errEl.textContent = "Please enter email and password."; errEl.removeAttribute("hidden"); }
+    return;
+  }
+  if (loginBtn) { loginBtn.textContent = "Signing in…"; loginBtn.disabled = true; }
+  if (errEl) errEl.setAttribute("hidden", "");
+  try {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    setCurrentUser(data.session.access_token);
+    hideLogin();
+    bootstrap().catch((e) => setStatus(`Error: ${e.message}`));
+  } catch (err) {
+    const msg = err?.message ?? "Sign in failed. Please try again.";
+    if (errEl) { errEl.textContent = msg; errEl.removeAttribute("hidden"); }
+  } finally {
+    if (loginBtn) { loginBtn.textContent = "Sign In"; loginBtn.disabled = false; }
+  }
+}
+
+async function handleSignOut() {
+  await supabaseClient.auth.signOut();
+  currentUser = null;
+  showLogin();
+}
+
+async function initAuth() {
+  // Supabase v2 uses getSession()
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  if (session?.access_token) {
+    setCurrentUser(session.access_token);
+    hideLogin();
+    bootstrap().catch((e) => setStatus(`Error: ${e.message}`));
+  } else {
+    showLogin();
+  }
+}
+
+// Wire login form events (after DOM ready)
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("login-btn")?.addEventListener("click", handleLogin);
+  document.getElementById("login-password")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleLogin();
+  });
+  document.getElementById("signout-btn")?.addEventListener("click", handleSignOut);
+});
 const ROW_FORM_SHEETS = new Set();
 const RENT_ROLL_REQUIRED_ROW_FIELDS = [
   "regular_rent",
@@ -875,7 +998,7 @@ function renderGlobalMetrics(model) {
   globalMetricsEl.innerHTML = "";
 
   const cards = [
-    createMetricCard("Mode", isAdminMode ? "Admin" : "Analyst"),
+    createMetricCard("Mode", isAdminMode() ? "Admin" : "Analyst"),
     createMetricCard("Last Run", "Not run"),
   ];
 
@@ -3634,9 +3757,10 @@ function renderAdminMortgagePanel(payload) {
 
       const response = await fetch(adminMortgageOverrideUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ overrides }),
       });
+      if (response.status === 401) { showLogin("Session expired. Please sign in again."); return; }
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Failed to save overrides");
       setStatus(
@@ -3653,12 +3777,13 @@ function renderAdminMortgagePanel(payload) {
 }
 
 async function loadAdminMortgageData(preserveTab = false) {
-  if (!isAdminMode) return;
+  if (!isAdminMode()) return;
   const previousActive = preserveTab
     ? document.querySelector(".tab-btn.active")?.dataset.sheet || ""
     : "";
 
-  const response = await fetch(adminMortgageUrl);
+  const response = await fetch(adminMortgageUrl, { headers: authHeaders() });
+  if (response.status === 401) { showLogin("Session expired. Please sign in again."); return; }
   if (!response.ok) throw new Error("Failed to load mortgage admin data");
   const payload = await response.json();
 
@@ -3833,12 +3958,12 @@ async function resetInputs() {
   if (!workbookModel) return;
   const active = document.querySelector(".tab-btn.active")?.dataset.sheet || "";
   renderWorkbook(workbookModel);
-  if (isAdminMode) await loadAdminMortgageData(false);
+  if (isAdminMode()) await loadAdminMortgageData(false);
   if (active) {
     const exists = document.querySelector(`.tab-btn[data-sheet="${active}"]`);
     if (exists) activateSheet(active);
   }
-  if (adminSummaryValueEl) adminSummaryValueEl.textContent = isAdminMode ? "Admin" : "Analyst";
+  if (adminSummaryValueEl) adminSummaryValueEl.textContent = isAdminMode() ? "Admin" : "Analyst";
   if (globalLastRunValueEl) globalLastRunValueEl.textContent = "Not run";
   setStatus("Inputs reset.");
   updateValidationState();
@@ -3880,12 +4005,13 @@ async function calculate() {
     rentRollState = normalizeRentRollState(rentRollState || rentRollDefaultState || buildInitialRentRollState());
     const response = await fetch(calculateUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders(),
       body: JSON.stringify({
         inputs: collectInputs(),
         rent_roll: rentRollPayload(),
       }),
     });
+    if (response.status === 401) { showLogin("Session expired. Please sign in again."); return; }
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Calculation failed");
 
@@ -3906,7 +4032,8 @@ async function calculate() {
 
 async function bootstrap() {
   setStatus("Loading underwriting model...");
-  const response = await fetch(modelUrl);
+  const response = await fetch(modelUrl, { headers: authHeaders() });
+  if (response.status === 401) { showLogin("Session expired. Please sign in again."); return; }
   if (!response.ok) {
     setStatus("Failed to load model metadata.");
     return;
@@ -3914,7 +4041,7 @@ async function bootstrap() {
   workbookModel = await response.json();
   renderWorkbook(workbookModel);
 
-  if (isAdminMode) {
+  if (isAdminMode()) {
     await loadAdminMortgageData(false);
     setStatus("Loaded analyst tabs + admin mortgage logic panel.");
   } else {
@@ -3934,7 +4061,8 @@ resetBtn.addEventListener("click", () => {
   });
 });
 
-bootstrap().catch((error) => {
+initAuth().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   setStatus(`Error: ${message}`);
+  showLogin("Initialisation error. Please refresh.");
 });
