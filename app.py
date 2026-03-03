@@ -1476,7 +1476,7 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Invalid or expired token"}, status=401)
             return None, True
         if required_role:
-            role = payload.get("raw_app_meta_data", {}).get("role", "analyst")
+            role = (payload.get("app_metadata") or payload.get("raw_app_meta_data") or {}).get("role", "analyst")
             if role != required_role:
                 self._send_json({"error": "Insufficient permissions"}, status=403)
                 return None, True

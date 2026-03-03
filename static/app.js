@@ -84,7 +84,7 @@ function setCurrentUser(accessToken) {
   _cachedAccessToken = accessToken;
   const payload = _decodeJwtPayload(accessToken);
   if (!payload) return;
-  const role = payload?.raw_app_meta_data?.role ?? "analyst";
+  const role = payload?.app_metadata?.role ?? payload?.raw_app_meta_data?.role ?? "analyst";
   currentUser = { email: payload.email ?? "", role };
   const emailEl = document.getElementById("user-email-display");
   const badgeEl = document.getElementById("role-badge");
