@@ -25,6 +25,11 @@ supabaseClient.auth.onAuthStateChange((_event, session) => {
   } else {
     _cachedAccessToken = "";
   }
+  // Handle PKCE password-recovery links (Supabase v2 default flow)
+  if (_event === "PASSWORD_RECOVERY") {
+    history.replaceState(null, "", window.location.pathname);
+    showSetPassword();
+  }
 });
 
 function authHeaders() {
@@ -228,17 +233,11 @@ async function handleSetPassword() {
     }
     if (btn) btn.setAttribute("hidden", "");
 
-    // Sign out and return to login screen after a short delay
+    // Sign out then do a full page reload — ensures Supabase SDK state is
+    // completely fresh so the subsequent sign-in works reliably
     setTimeout(async () => {
       await supabaseClient.auth.signOut();
-      _cachedAccessToken = "";
-      currentUser = null;
-      if (newPwEl) newPwEl.value = "";
-      if (confirmPwEl) confirmPwEl.value = "";
-      if (successEl) successEl.setAttribute("hidden", "");
-      if (btn) { btn.textContent = "Set Password & Continue"; btn.disabled = false; btn.removeAttribute("hidden"); }
-      document.getElementById("set-password-view")?.setAttribute("hidden", "");
-      document.getElementById("sign-in-view")?.removeAttribute("hidden");
+      window.location.reload();
     }, 2500);
   } catch (err) {
     const msg = err?.message ?? "Failed to set password. Please try again.";
