@@ -1242,7 +1242,7 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         # Block cross-origin requests from non-whitelisted origins on API routes
-        if parsed.path.startswith("/api/") and self._cors_origin() == "":
+        if parsed.path.startswith("/api/") and self._cors_origin() == "__blocked__":
             self._send_json({"error": "Origin not allowed"}, status=403)
             return
         if parsed.path == "/api/model":
@@ -1268,7 +1268,7 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         # Block cross-origin requests from non-whitelisted origins
-        if self._cors_origin() == "":
+        if self._cors_origin() == "__blocked__":
             self._send_json({"error": "Origin not allowed"}, status=403)
             return
         if parsed.path not in {"/api/calculate", "/api/admin/mortgage-overrides"}:

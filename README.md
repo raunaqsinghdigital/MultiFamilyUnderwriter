@@ -121,29 +121,47 @@ Before inviting users, Supabase must know where to redirect invite email links. 
 
 Roles are stored in `app_metadata` (only the service role key can write this — users cannot change their own role).
 
-Get the `service_role_key` from: **Project Settings → API → Project API keys → `service_role` `secret`**
+#### Option A — SQL Editor (recommended, no keys required)
 
-Get the user's UID from: **Authentication → Users** (shown in the user list)
+1. Go to **Supabase Dashboard → SQL Editor**
+2. Run the query for the role you want to assign (replace the email address):
 
-Then run the following curl command (replace `<project-ref>`, `<service_role_key>`, and `<user-uid>`):
+```sql
+-- Set role to "admin"
+UPDATE auth.users
+SET raw_app_meta_data = raw_app_meta_data || '{"role": "admin"}'::jsonb
+WHERE email = 'user@example.com';
+
+-- Set role to "analyst"
+UPDATE auth.users
+SET raw_app_meta_data = raw_app_meta_data || '{"role": "analyst"}'::jsonb
+WHERE email = 'user@example.com';
+```
+
+The `||` operator merges the new key into the existing metadata — `provider` and `providers` fields are preserved. The dashboard session handles authentication; no service role key required.
+
+#### Option B — curl with silent prompt (fallback)
+
+If you prefer the API, use `read -rs` so the key is never echoed to the terminal or saved in shell history:
 
 ```bash
+# Prompts silently — key is not stored in ~/.zsh_history
+read -rs SERVICE_ROLE_KEY
+
 # Set role to "admin"
 curl -X PATCH \
   https://<project-ref>.supabase.co/auth/v1/admin/users/<user-uid> \
-  -H "Authorization: Bearer <service_role_key>" \
+  -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
   -H "Content-Type: application/json" \
   -d '{"app_metadata": {"role": "admin"}}'
 
-# Set role to "analyst"
-curl -X PATCH \
-  https://<project-ref>.supabase.co/auth/v1/admin/users/<user-uid> \
-  -H "Authorization: Bearer <service_role_key>" \
-  -H "Content-Type: application/json" \
-  -d '{"app_metadata": {"role": "analyst"}}'
+unset SERVICE_ROLE_KEY  # clear from memory immediately
 ```
 
-> **Security note:** Never expose the `service_role_key` in frontend code or commit it to git.
+Get `<project-ref>` from: **Project Settings → API → Project URL**
+Get `<user-uid>` from: **Authentication → Users** (shown in the user list)
+
+> **Security note:** Never paste the `service_role_key` inline in a command — it will be saved to shell history and visible in process listings.
 
 After setting the role, the user must **sign out and sign back in** for the new role to appear in their JWT.
 
@@ -210,8 +228,8 @@ https://www.ramavasa.com,https://ramavasa.com
 | Task | How |
 |------|-----|
 | Create a user | Supabase Dashboard → Authentication → Users → Invite user |
-| Set role to admin | `curl PATCH /auth/v1/admin/users/<uid>` with `app_metadata.role = "admin"` (see Step 6) |
-| Set role to analyst | Same curl, with `"role": "analyst"` |
+| Set role to admin | SQL Editor: `UPDATE auth.users SET raw_app_meta_data = raw_app_meta_data \|\| '{"role":"admin"}'::jsonb WHERE email = '...'` (see Step 6) |
+| Set role to analyst | Same query, with `"role": "analyst"` |
 | Remove a user | Supabase Dashboard → Authentication → Users → Delete |
 | User forgets password | Supabase Dashboard → Authentication → Users → Send reset email |
 
