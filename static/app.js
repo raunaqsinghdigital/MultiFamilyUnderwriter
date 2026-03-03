@@ -7,21 +7,30 @@ const PDF_REPORT_SHEET = "__pdf_report";
 // ── Supabase Auth ─────────────────────────────────────────────────────────────
 // Replace SUPABASE_URL and SUPABASE_ANON_KEY with your project values from:
 // Supabase Dashboard → Project Settings → API
-const SUPABASE_URL = "https://YOUR_PROJECT_REF.supabase.co";
-const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
+const SUPABASE_URL = "https://jpyoondbepffknsrbkoe.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpweW9vbmRiZXBmZmtuc3Jia29lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NDgxMjAsImV4cCI6MjA4ODEyNDEyMH0.mDaCImy0s-ReK4eXq6LXpCllSy_HUEojCzEpLTDcIEw";
 const { createClient } = supabase;
 const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let currentUser = null; // { email, role } — set after successful auth
+let _cachedAccessToken = ""; // kept fresh by onAuthStateChange
 
 const isAdminMode = () => currentUser?.role === "admin";
 
+// Keep token fresh across auto-refresh cycles
+supabaseClient.auth.onAuthStateChange((_event, session) => {
+  if (session?.access_token) {
+    _cachedAccessToken = session.access_token;
+  } else {
+    _cachedAccessToken = "";
+  }
+});
+
 function authHeaders() {
-  const session = supabaseClient.auth.session ? supabaseClient.auth.session() : null;
-  const token = session?.access_token ?? "";
   return {
     "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(_cachedAccessToken ? { Authorization: `Bearer ${_cachedAccessToken}` } : {}),
   };
 }
 
@@ -45,7 +54,10 @@ function showLogin(msg = "") {
   if (userChip) userChip.setAttribute("hidden", "");
   if (msg) {
     const errEl = document.getElementById("login-error");
-    if (errEl) { errEl.textContent = msg; errEl.removeAttribute("hidden"); }
+    if (errEl) {
+      errEl.textContent = msg;
+      errEl.removeAttribute("hidden");
+    }
   }
 }
 
@@ -57,10 +69,14 @@ function hideLogin() {
   if (appShell) appShell.removeAttribute("hidden");
   if (userChip) userChip.removeAttribute("hidden");
   const errEl = document.getElementById("login-error");
-  if (errEl) { errEl.textContent = ""; errEl.setAttribute("hidden", ""); }
+  if (errEl) {
+    errEl.textContent = "";
+    errEl.setAttribute("hidden", "");
+  }
 }
 
 function setCurrentUser(accessToken) {
+  _cachedAccessToken = accessToken;
   const payload = _decodeJwtPayload(accessToken);
   if (!payload) return;
   const role = payload?.raw_app_meta_data?.role ?? "analyst";
@@ -82,34 +98,108 @@ async function handleLogin() {
   const email = emailEl?.value.trim() ?? "";
   const password = passwordEl?.value ?? "";
   if (!email || !password) {
-    if (errEl) { errEl.textContent = "Please enter email and password."; errEl.removeAttribute("hidden"); }
+    if (errEl) {
+      errEl.textContent = "Please enter email and password.";
+      errEl.removeAttribute("hidden");
+    }
     return;
   }
-  if (loginBtn) { loginBtn.textContent = "Signing in…"; loginBtn.disabled = true; }
+  if (loginBtn) {
+    loginBtn.textContent = "Signing in…";
+    loginBtn.disabled = true;
+  }
   if (errEl) errEl.setAttribute("hidden", "");
   try {
-    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email,
+      password,
+    });
     if (error) throw error;
     setCurrentUser(data.session.access_token);
     hideLogin();
     bootstrap().catch((e) => setStatus(`Error: ${e.message}`));
   } catch (err) {
     const msg = err?.message ?? "Sign in failed. Please try again.";
-    if (errEl) { errEl.textContent = msg; errEl.removeAttribute("hidden"); }
+    if (errEl) {
+      errEl.textContent = msg;
+      errEl.removeAttribute("hidden");
+    }
   } finally {
-    if (loginBtn) { loginBtn.textContent = "Sign In"; loginBtn.disabled = false; }
+    if (loginBtn) {
+      loginBtn.textContent = "Sign In";
+      loginBtn.disabled = false;
+    }
   }
 }
 
 async function handleSignOut() {
   await supabaseClient.auth.signOut();
+  _cachedAccessToken = "";
   currentUser = null;
   showLogin();
 }
 
+function showSetPassword() {
+  document.getElementById("sign-in-view")?.setAttribute("hidden", "");
+  document.getElementById("set-password-view")?.removeAttribute("hidden");
+  document.getElementById("login-overlay")?.removeAttribute("hidden");
+  document.getElementById("app-shell")?.setAttribute("hidden", "");
+  document.getElementById("user-chip")?.setAttribute("hidden", "");
+}
+
+async function handleSetPassword() {
+  const newPwEl = document.getElementById("new-password");
+  const confirmPwEl = document.getElementById("confirm-password");
+  const btn = document.getElementById("set-password-btn");
+  const errEl = document.getElementById("set-password-error");
+
+  const password = newPwEl?.value ?? "";
+  const confirm = confirmPwEl?.value ?? "";
+
+  if (!password || password.length < 8) {
+    if (errEl) { errEl.textContent = "Password must be at least 8 characters."; errEl.removeAttribute("hidden"); }
+    return;
+  }
+  if (password !== confirm) {
+    if (errEl) { errEl.textContent = "Passwords do not match."; errEl.removeAttribute("hidden"); }
+    return;
+  }
+
+  if (btn) { btn.textContent = "Setting password…"; btn.disabled = true; }
+  if (errEl) errEl.setAttribute("hidden", "");
+
+  try {
+    const { error } = await supabaseClient.auth.updateUser({ password });
+    if (error) throw error;
+    // Grab the refreshed session after password update
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (session?.access_token) {
+      setCurrentUser(session.access_token);
+    }
+    hideLogin();
+    bootstrap().catch((e) => setStatus(`Error: ${e.message}`));
+  } catch (err) {
+    const msg = err?.message ?? "Failed to set password. Please try again.";
+    if (errEl) { errEl.textContent = msg; errEl.removeAttribute("hidden"); }
+  } finally {
+    if (btn) { btn.textContent = "Set Password & Continue"; btn.disabled = false; }
+  }
+}
+
 async function initAuth() {
-  // Supabase v2 uses getSession()
+  // Detect invite / password-recovery link — Supabase puts type in the URL hash
+  const hashParams = new URLSearchParams(window.location.hash.substring(1));
+  const linkType = hashParams.get("type"); // "invite" | "recovery" | null
+
+  // Exchange hash tokens into a Supabase session (SDK reads the hash automatically)
   const { data: { session } } = await supabaseClient.auth.getSession();
+
+  if (linkType === "invite" || linkType === "recovery") {
+    history.replaceState(null, "", window.location.pathname); // clean URL
+    showSetPassword();
+    return;
+  }
+
   if (session?.access_token) {
     setCurrentUser(session.access_token);
     hideLogin();
@@ -126,11 +216,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Enter") handleLogin();
   });
   document.getElementById("signout-btn")?.addEventListener("click", handleSignOut);
+  document.getElementById("set-password-btn")?.addEventListener("click", handleSetPassword);
+  document.getElementById("confirm-password")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleSetPassword();
+  });
 });
 const ROW_FORM_SHEETS = new Set();
-const RENT_ROLL_REQUIRED_ROW_FIELDS = [
-  "regular_rent",
-];
+const RENT_ROLL_REQUIRED_ROW_FIELDS = ["regular_rent"];
 const RENT_ROLL_CONFIG_REQUIRED_IDS = ["#rr-unit-count"];
 const PERCENT_WHOLE_INPUT_KEYS = new Set([
   "Valuation!D14", // Vacancy
@@ -157,8 +249,14 @@ const VALUATION_RENTROLL_AUTOFILL_KEYS = new Map([
 const VALUATION_INPUT_HINTS = new Map([
   ["Valuation!D6", "Enter purchase price as dollar amount."],
   ["Valuation!E10", "Enter annual laundry income in $/year."],
-  ["Valuation!E11", "Enter annual parking income in $/year (or auto-fill from Rent Roll)."],
-  ["Valuation!E12", "Enter annual other income in $/year (or auto-fill from Rent Roll pet fee total)."],
+  [
+    "Valuation!E11",
+    "Enter annual parking income in $/year (or auto-fill from Rent Roll).",
+  ],
+  [
+    "Valuation!E12",
+    "Enter annual other income in $/year (or auto-fill from Rent Roll pet fee total).",
+  ],
   ["Valuation!D14", "Enter vacancy as percent (example: 3 for 3%)."],
   ["Valuation!E18", "Enter annual property taxes in $/year."],
   ["Valuation!E19", "Enter annual insurance in $/year."],
@@ -166,16 +264,29 @@ const VALUATION_INPUT_HINTS = new Map([
   ["Valuation!F21", "Enter repairs and maintenance in $/unit/year."],
   ["Valuation!F22", "Enter appliance reserve in $/unit/year."],
   ["Valuation!F23", "Enter wages/on-site manager in $/unit/year."],
-  ["Valuation!D24", "Enter management fee as percent of EGI (example: 4 for 4%)."],
-  ["Valuation!D25", "Enter other/advertising fee as percent of EGI (example: 2 for 2%)."],
+  [
+    "Valuation!D24",
+    "Enter management fee as percent of EGI (example: 4 for 4%).",
+  ],
+  [
+    "Valuation!D25",
+    "Enter other/advertising fee as percent of EGI (example: 2 for 2%).",
+  ],
   ["Valuation!E29", "Enter market cap rate as percent (example: 7 for 7%)."],
-  ["Valuation!E32", "Enter lender interest rate as percent (example: 5.25 for 5.25%)."],
+  [
+    "Valuation!E32",
+    "Enter lender interest rate as percent (example: 5.25 for 5.25%).",
+  ],
   ["Valuation!E33", "Enter amortization period in years."],
   ["Valuation!E34", "Enter max lender LTV as percent (example: 75 for 75%)."],
   ["Valuation!E35", "Enter required DSCR ratio (example: 1.25)."],
 ]);
 const VALUATION_RESULT_FIELDS = [
-  { key: "Valuation!E15", label: "Effective Gross Income (EGI)", format: "money" },
+  {
+    key: "Valuation!E15",
+    label: "Effective Gross Income (EGI)",
+    format: "money",
+  },
   {
     key: "Valuation!E26",
     label: "Operating Expenses (OE)",
@@ -184,7 +295,11 @@ const VALUATION_RESULT_FIELDS = [
     secondaryLabel: "% EGI",
     secondaryFormat: "percent",
   },
-  { key: "Valuation!E28", label: "Net Operating Income (NOI)", format: "money" },
+  {
+    key: "Valuation!E28",
+    label: "Net Operating Income (NOI)",
+    format: "money",
+  },
   {
     key: "Valuation!E30",
     label: "Value Based on Area Cap Rate",
@@ -193,9 +308,17 @@ const VALUATION_RESULT_FIELDS = [
     secondaryLabel: "Area Cap Rate",
     secondaryFormat: "percent",
   },
-  { key: "Valuation!E47", label: "Actual Property Cap Rate (NOI/Price)", format: "percent" },
+  {
+    key: "Valuation!E47",
+    label: "Actual Property Cap Rate (NOI/Price)",
+    format: "percent",
+  },
   { key: "Valuation!E43", label: "Lesser Of The Three Loans", format: "money" },
-  { key: "Valuation!E44", label: "Actual Loan To Cost (LTC)", format: "percent" },
+  {
+    key: "Valuation!E44",
+    label: "Actual Loan To Cost (LTC)",
+    format: "percent",
+  },
   { key: "Valuation!E46", label: "Actual DSCR", format: "number" },
 ];
 const VALUATION_TABLE_COLUMNS = [
@@ -209,29 +332,69 @@ const VALUATION_SECTIONS = [
   {
     title: "Rental Revenue",
     rows: [
-      { label: "Annual Rent (actual, not projected)", cells: { year: "Valuation!E9", unit_year: "Valuation!F9", month: "Valuation!G9" } },
+      {
+        label: "Annual Rent (actual, not projected)",
+        cells: {
+          year: "Valuation!E9",
+          unit_year: "Valuation!F9",
+          month: "Valuation!G9",
+        },
+      },
       {
         label: "Laundry",
         description: "12-15/unit/month (144-180 PUPA).",
-        cells: { year: "Valuation!E10", unit_year: "Valuation!F10", month: "Valuation!G10" },
+        cells: {
+          year: "Valuation!E10",
+          unit_year: "Valuation!F10",
+          month: "Valuation!G10",
+        },
       },
       {
         label: "Parking",
         description: "If not included on Rent Roll tab.",
-        cells: { year: "Valuation!E11", unit_year: "Valuation!F11", month: "Valuation!G11" },
+        cells: {
+          year: "Valuation!E11",
+          unit_year: "Valuation!F11",
+          month: "Valuation!G11",
+        },
       },
       {
         label: "Other",
         description: "If not included on Rent Roll tab.",
-        cells: { year: "Valuation!E12", unit_year: "Valuation!F12", month: "Valuation!G12" },
+        cells: {
+          year: "Valuation!E12",
+          unit_year: "Valuation!F12",
+          month: "Valuation!G12",
+        },
       },
-      { label: "Potential Gross Income (PGI)", emphasis: true, cells: { year: "Valuation!E13", unit_year: "Valuation!F13", month: "Valuation!G13" } },
+      {
+        label: "Potential Gross Income (PGI)",
+        emphasis: true,
+        cells: {
+          year: "Valuation!E13",
+          unit_year: "Valuation!F13",
+          month: "Valuation!G13",
+        },
+      },
       {
         label: "Vacancy",
         description: "Use CMHC values for the specific neighborhood.",
-        cells: { pct: "Valuation!D14", year: "Valuation!E14", unit_year: "Valuation!F14", month: "Valuation!G14" },
+        cells: {
+          pct: "Valuation!D14",
+          year: "Valuation!E14",
+          unit_year: "Valuation!F14",
+          month: "Valuation!G14",
+        },
       },
-      { label: "Effective Gross Income (EGI)", emphasis: true, cells: { year: "Valuation!E15", unit_year: "Valuation!F15", month: "Valuation!G15" } },
+      {
+        label: "Effective Gross Income (EGI)",
+        emphasis: true,
+        cells: {
+          year: "Valuation!E15",
+          unit_year: "Valuation!F15",
+          month: "Valuation!G15",
+        },
+      },
     ],
   },
   {
@@ -240,65 +403,134 @@ const VALUATION_SECTIONS = [
       {
         label: "Property Taxes",
         description: "0.7 - 1% of sale price.",
-        descriptionSupplementals: [{ label: "Current", key: "Valuation!L18", format: "percent" }],
-        cells: { year: "Valuation!E18", unit_year: "Valuation!F18", month: "Valuation!G18", pct_egi: "Valuation!H18" },
+        descriptionSupplementals: [
+          { label: "Current", key: "Valuation!L18", format: "percent" },
+        ],
+        cells: {
+          year: "Valuation!E18",
+          unit_year: "Valuation!F18",
+          month: "Valuation!G18",
+          pct_egi: "Valuation!H18",
+        },
       },
       {
         label: "Insurance",
         description: "Best to get quote. PUPA ~600-800 /unit/yr.",
-        cells: { year: "Valuation!E19", unit_year: "Valuation!F19", month: "Valuation!G19", pct_egi: "Valuation!H19" },
+        cells: {
+          year: "Valuation!E19",
+          unit_year: "Valuation!F19",
+          month: "Valuation!G19",
+          pct_egi: "Valuation!H19",
+        },
       },
       {
         label: "Utilities",
-        description: "All utilities: ~3000 PUPA; water/gas only: ~1000-1350 by unit mix.",
-        cells: { year: "Valuation!E20", unit_year: "Valuation!F20", month: "Valuation!G20", pct_egi: "Valuation!H20" },
+        description:
+          "All utilities: ~3000 PUPA; water/gas only: ~1000-1350 by unit mix.",
+        cells: {
+          year: "Valuation!E20",
+          unit_year: "Valuation!F20",
+          month: "Valuation!G20",
+          pct_egi: "Valuation!H20",
+        },
       },
       {
         label: "Repairs and Maintenance",
         description: "PUPA ~750-830 newer, 850-900 older.",
-        cells: { year: "Valuation!E21", unit_year: "Valuation!F21", month: "Valuation!G21", pct_egi: "Valuation!H21" },
+        cells: {
+          year: "Valuation!E21",
+          unit_year: "Valuation!F21",
+          month: "Valuation!G21",
+          pct_egi: "Valuation!H21",
+        },
       },
       {
         label: "Appliances",
         description: "PUPA ~60 per appliance.",
-        cells: { year: "Valuation!E22", unit_year: "Valuation!F22", month: "Valuation!G22", pct_egi: "Valuation!H22" },
+        cells: {
+          year: "Valuation!E22",
+          unit_year: "Valuation!F22",
+          month: "Valuation!G22",
+          pct_egi: "Valuation!H22",
+        },
       },
       {
         label: "Wages /on-site manager",
         description: "40-45/unit/month.",
-        descriptionSupplementals: [{ label: "Current", key: "Valuation!L23", format: "money", suffix: "/unit/month" }],
-        cells: { year: "Valuation!E23", unit_year: "Valuation!F23", month: "Valuation!G23", pct_egi: "Valuation!H23" },
+        descriptionSupplementals: [
+          {
+            label: "Current",
+            key: "Valuation!L23",
+            format: "money",
+            suffix: "/unit/month",
+          },
+        ],
+        cells: {
+          year: "Valuation!E23",
+          unit_year: "Valuation!F23",
+          month: "Valuation!G23",
+          pct_egi: "Valuation!H23",
+        },
       },
       {
         label: "Management",
         description: "4.5-6% for <24 units, or 8-10% including onsite.",
-        cells: { pct: "Valuation!D24", year: "Valuation!E24", unit_year: "Valuation!F24", month: "Valuation!G24", pct_egi: "Valuation!H24" },
+        cells: {
+          pct: "Valuation!D24",
+          year: "Valuation!E24",
+          unit_year: "Valuation!F24",
+          month: "Valuation!G24",
+          pct_egi: "Valuation!H24",
+        },
       },
       {
         label: "Other/Advertising",
         description: "~1-2%.",
-        cells: { pct: "Valuation!D25", year: "Valuation!E25", unit_year: "Valuation!F25", month: "Valuation!G25", pct_egi: "Valuation!H25" },
+        cells: {
+          pct: "Valuation!D25",
+          year: "Valuation!E25",
+          unit_year: "Valuation!F25",
+          month: "Valuation!G25",
+          pct_egi: "Valuation!H25",
+        },
       },
       {
         label: "Total Operating Expense (OE)",
         emphasis: true,
-        description: "Newer assets should be ~35-45%; older assets ~45-55% of EGI.",
-        cells: { year: "Valuation!E26", unit_year: "Valuation!F26", month: "Valuation!G26", pct_egi: "Valuation!H26" },
+        description:
+          "Newer assets should be ~35-45%; older assets ~45-55% of EGI.",
+        cells: {
+          year: "Valuation!E26",
+          unit_year: "Valuation!F26",
+          month: "Valuation!G26",
+          pct_egi: "Valuation!H26",
+        },
       },
       {
         label: "Net Operating Income (NOI)",
         emphasis: true,
-        cells: { year: "Valuation!E28", unit_year: "Valuation!F28", month: "Valuation!G28" },
+        cells: {
+          year: "Valuation!E28",
+          unit_year: "Valuation!F28",
+          month: "Valuation!G28",
+        },
       },
     ],
   },
   {
     title: "Financing & Value",
     rows: [
-      { label: "Value Based on Cap Rate", cells: { year: "Valuation!E30", unit_year: "Valuation!F30" } },
+      {
+        label: "Value Based on Cap Rate",
+        cells: { year: "Valuation!E30", unit_year: "Valuation!F30" },
+      },
       {
         label: "Max Annual Debt Service",
-        cells: { year: "Valuation!E36", unit_year: "Valuation!F36", month: "Valuation!G36" },
+        cells: {
+          year: "Valuation!E36",
+          unit_year: "Valuation!F36",
+          month: "Valuation!G36",
+        },
       },
       {
         label: "Debt Coverage Ratio (NOI/DS)",
@@ -307,13 +539,32 @@ const VALUATION_SECTIONS = [
       },
       { label: "Value Based on DSCR", cells: { year: "Valuation!E38" } },
       { label: "Max Loan Based on LTV", cells: { year: "Valuation!E39" } },
-      { label: "Max Loan Based on Purchase Price (LTC)", cells: { year: "Valuation!E40" } },
+      {
+        label: "Max Loan Based on Purchase Price (LTC)",
+        cells: { year: "Valuation!E40" },
+      },
       { label: "Max Loan Based on DSCR", cells: { year: "Valuation!E41" } },
-      { label: "Lesser Of The Three Loans", cells: { year: "Valuation!E43" }, emphasis: true },
-      { label: "Actual LTC", cells: { pct: "Valuation!E44" }, formats: { pct: "percent" } },
+      {
+        label: "Lesser Of The Three Loans",
+        cells: { year: "Valuation!E43" },
+        emphasis: true,
+      },
+      {
+        label: "Actual LTC",
+        cells: { pct: "Valuation!E44" },
+        formats: { pct: "percent" },
+      },
       { label: "Actual Debt Service (P&I)", cells: { year: "Valuation!E45" } },
-      { label: "Actual Debt Coverage Ratio", cells: { pct: "Valuation!E46" }, formats: { pct: "number" } },
-      { label: "Property Cap Rate", cells: { pct: "Valuation!E47" }, formats: { pct: "percent" } },
+      {
+        label: "Actual Debt Coverage Ratio",
+        cells: { pct: "Valuation!E46" },
+        formats: { pct: "number" },
+      },
+      {
+        label: "Property Cap Rate",
+        cells: { pct: "Valuation!E47" },
+        formats: { pct: "percent" },
+      },
     ],
   },
 ];
@@ -327,7 +578,11 @@ const VALUATION_SECONDARY_ROWS = [
     supplementalSuffix: "/door",
   },
   { label: "Max Loan Based on LTV", key: "Valuation!E39", format: "money" },
-  { label: "Max Loan Based on Purchase Price (LTC)", key: "Valuation!E40", format: "money" },
+  {
+    label: "Max Loan Based on Purchase Price (LTC)",
+    key: "Valuation!E40",
+    format: "money",
+  },
   { label: "Max Loan Based on DSCR", key: "Valuation!E41", format: "money" },
 ];
 const VALUATION_ASSUMPTION_NOTES = new Map([
@@ -339,7 +594,11 @@ const RETURNS_KEY_RESULTS = [
   { key: "Returns!D33", label: "Annual Cash Flow", format: "money" },
   { key: "Returns!D58", label: "Total Investment", format: "money" },
   { key: "Returns!H58", label: "Investor Annual ROI", format: "percent" },
-  { key: "Returns!D14", label: "Mortgage Amount (incl. CMHC)", format: "money" },
+  {
+    key: "Returns!D14",
+    label: "Mortgage Amount (incl. CMHC)",
+    format: "money",
+  },
   { key: "Returns!D37", label: "Down Payment", format: "money" },
 ];
 const RETURNS_TABLE_COLUMNS = [
@@ -355,18 +614,46 @@ const RETURNS_SECTIONS = [
         cells: { value: "Returns!B1" },
         formats: { value: "text" },
       },
-      { label: "Appraised Value", cells: { value: "Returns!D5" }, formats: { value: "money" } },
-      { label: "Purchase Price", cells: { value: "Returns!D6" }, formats: { value: "money" } },
+      {
+        label: "Appraised Value",
+        cells: { value: "Returns!D5" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Purchase Price",
+        cells: { value: "Returns!D6" },
+        formats: { value: "money" },
+      },
     ],
   },
   {
     title: "Commercial Financing",
     rows: [
-      { label: "Interest Rate", cells: { value: "Returns!D9" }, formats: { value: "percent" } },
-      { label: "Amortization Years", cells: { value: "Returns!D10" }, formats: { value: "number" } },
-      { label: "Loan To Value", cells: { value: "Returns!D11" }, formats: { value: "percent" } },
-      { label: "Mortgage Amount", cells: { value: "Returns!D12" }, formats: { value: "money" } },
-      { label: "CMHC Premium", cells: { value: "Returns!D13" }, formats: { value: "percent" } },
+      {
+        label: "Interest Rate",
+        cells: { value: "Returns!D9" },
+        formats: { value: "percent" },
+      },
+      {
+        label: "Amortization Years",
+        cells: { value: "Returns!D10" },
+        formats: { value: "number" },
+      },
+      {
+        label: "Loan To Value",
+        cells: { value: "Returns!D11" },
+        formats: { value: "percent" },
+      },
+      {
+        label: "Mortgage Amount",
+        cells: { value: "Returns!D12" },
+        formats: { value: "money" },
+      },
+      {
+        label: "CMHC Premium",
+        cells: { value: "Returns!D13" },
+        formats: { value: "percent" },
+      },
       {
         label: "Mortgage Amount incl. CMHC Premium",
         cells: { value: "Returns!D14" },
@@ -378,89 +665,324 @@ const RETURNS_SECTIONS = [
   {
     title: "Monthly Cash Flow",
     rows: [
-      { label: "Income", cells: { value: "Returns!D18" }, formats: { value: "money" } },
+      {
+        label: "Income",
+        cells: { value: "Returns!D18" },
+        formats: { value: "money" },
+      },
       { label: "Expenses", cells: {}, emphasis: true },
-      { label: "Vacancy", cells: { pct: "Returns!C21", value: "Returns!D21" }, formats: { pct: "percent", value: "money" } },
-      { label: "Mortgage", cells: { value: "Returns!D22" }, formats: { value: "money" } },
-      { label: "Property Tax", cells: { value: "Returns!D23" }, formats: { value: "money" } },
-      { label: "Insurance", cells: { value: "Returns!D24" }, formats: { value: "money" } },
-      { label: "Utilities", cells: { value: "Returns!D25" }, formats: { value: "money" } },
-      { label: "Repairs & Maintenance", cells: { pct: "Returns!C26", value: "Returns!D26" }, formats: { pct: "percent", value: "money" } },
-      { label: "Property Manager", cells: { pct: "Returns!C27", value: "Returns!D27" }, formats: { pct: "percent", value: "money" } },
-      { label: "Asset Manager", cells: { pct: "Returns!C28", value: "Returns!D28" }, formats: { pct: "percent", value: "money" } },
-      { label: "Bookkeeping/Accounting/Legal", cells: { value: "Returns!D29" }, formats: { value: "money" } },
-      { label: "Pest Control/Snow Removal", cells: { value: "Returns!D30" }, formats: { value: "text" } },
-      { label: "Advertising/Bank Fees/Tenant Gifts", cells: { value: "Returns!D31" }, formats: { value: "money" } },
-      { label: "Total Expenses", cells: { value: "Returns!D32" }, formats: { value: "money" }, emphasis: true },
-      { label: "Annual Cash Flow", cells: { value: "Returns!D33" }, formats: { value: "money" }, emphasis: true },
-      { label: "Monthly Cash Flow", cells: { value: "Returns!D34" }, formats: { value: "money" }, emphasis: true },
+      {
+        label: "Vacancy",
+        cells: { pct: "Returns!C21", value: "Returns!D21" },
+        formats: { pct: "percent", value: "money" },
+      },
+      {
+        label: "Mortgage",
+        cells: { value: "Returns!D22" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Property Tax",
+        cells: { value: "Returns!D23" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Insurance",
+        cells: { value: "Returns!D24" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Utilities",
+        cells: { value: "Returns!D25" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Repairs & Maintenance",
+        cells: { pct: "Returns!C26", value: "Returns!D26" },
+        formats: { pct: "percent", value: "money" },
+      },
+      {
+        label: "Property Manager",
+        cells: { pct: "Returns!C27", value: "Returns!D27" },
+        formats: { pct: "percent", value: "money" },
+      },
+      {
+        label: "Asset Manager",
+        cells: { pct: "Returns!C28", value: "Returns!D28" },
+        formats: { pct: "percent", value: "money" },
+      },
+      {
+        label: "Bookkeeping/Accounting/Legal",
+        cells: { value: "Returns!D29" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Pest Control/Snow Removal",
+        cells: { value: "Returns!D30" },
+        formats: { value: "text" },
+      },
+      {
+        label: "Advertising/Bank Fees/Tenant Gifts",
+        cells: { value: "Returns!D31" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Total Expenses",
+        cells: { value: "Returns!D32" },
+        formats: { value: "money" },
+        emphasis: true,
+      },
+      {
+        label: "Annual Cash Flow",
+        cells: { value: "Returns!D33" },
+        formats: { value: "money" },
+        emphasis: true,
+      },
+      {
+        label: "Monthly Cash Flow",
+        cells: { value: "Returns!D34" },
+        formats: { value: "money" },
+        emphasis: true,
+      },
     ],
   },
   {
     title: "Total Investment",
     rows: [
-      { label: "Down Payment", cells: { value: "Returns!D37" }, formats: { value: "money" } },
-      { label: "Appraisal", cells: { value: "Returns!D39" }, formats: { value: "money" } },
-      { label: "Legal Fees (ours)", cells: { value: "Returns!D41" }, formats: { value: "money" } },
-      { label: "Legal Fees (lender)", cells: { value: "Returns!D42" }, formats: { value: "money" } },
-      { label: "Mortgage Broker Fees", cells: { value: "Returns!D43" }, formats: { value: "money" } },
-      { label: "CMHC Fees ($150/door)", cells: { value: "Returns!D44" }, formats: { value: "money" } },
-      { label: "Incorporation Fees / USA", cells: { value: "Returns!D46" }, formats: { value: "money" } },
-      { label: "Title Insurance", cells: { value: "Returns!D47" }, formats: { value: "money" } },
-      { label: "Insurance Review", cells: { value: "Returns!D48" }, formats: { value: "money" } },
-      { label: "Property Tax Adjustment", cells: { value: "Returns!D49" }, formats: { value: "money" } },
-      { label: "Late Closing Interest", cells: { value: "Returns!D50" }, formats: { value: "money" } },
-      { label: "Lender Fee", cells: { value: "Returns!D51" }, formats: { value: "money" } },
-      { label: "Property Inspection", cells: { value: "Returns!D52" }, formats: { value: "money" } },
-      { label: "Reserve Fund / Capex", cells: { value: "Returns!D53" }, formats: { value: "money" } },
-      { label: "GST Rebate", cells: { pct: "Returns!C55", value: "Returns!D55" }, formats: { pct: "percent", value: "money" } },
-      { label: "Acquisition Fee (yours)", cells: { pct: "Returns!C56", value: "Returns!D56" }, formats: { pct: "percent", value: "money" } },
-      { label: "Finance Fee (yours)", cells: { pct: "Returns!C57", value: "Returns!D57" }, formats: { pct: "percent", value: "money" } },
-      { label: "Total Investment", cells: { value: "Returns!D58" }, formats: { value: "money" }, emphasis: true },
+      {
+        label: "Down Payment",
+        cells: { value: "Returns!D37" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Appraisal",
+        cells: { value: "Returns!D39" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Legal Fees (ours)",
+        cells: { value: "Returns!D41" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Legal Fees (lender)",
+        cells: { value: "Returns!D42" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Mortgage Broker Fees",
+        cells: { value: "Returns!D43" },
+        formats: { value: "money" },
+      },
+      {
+        label: "CMHC Fees ($150/door)",
+        cells: { value: "Returns!D44" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Incorporation Fees / USA",
+        cells: { value: "Returns!D46" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Title Insurance",
+        cells: { value: "Returns!D47" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Insurance Review",
+        cells: { value: "Returns!D48" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Property Tax Adjustment",
+        cells: { value: "Returns!D49" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Late Closing Interest",
+        cells: { value: "Returns!D50" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Lender Fee",
+        cells: { value: "Returns!D51" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Property Inspection",
+        cells: { value: "Returns!D52" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Reserve Fund / Capex",
+        cells: { value: "Returns!D53" },
+        formats: { value: "money" },
+      },
+      {
+        label: "GST Rebate",
+        cells: { pct: "Returns!C55", value: "Returns!D55" },
+        formats: { pct: "percent", value: "money" },
+      },
+      {
+        label: "Acquisition Fee (yours)",
+        cells: { pct: "Returns!C56", value: "Returns!D56" },
+        formats: { pct: "percent", value: "money" },
+      },
+      {
+        label: "Finance Fee (yours)",
+        cells: { pct: "Returns!C57", value: "Returns!D57" },
+        formats: { pct: "percent", value: "money" },
+      },
+      {
+        label: "Total Investment",
+        cells: { value: "Returns!D58" },
+        formats: { value: "money" },
+        emphasis: true,
+      },
     ],
   },
   {
     title: "Annual Return",
     rows: [
-      { label: "From Cash Flow (Cash-on-Cash)", cells: { value: "Returns!H49" }, formats: { value: "percent" } },
-      { label: "From Mortgage Principal Reduction", cells: { value: "Returns!H50" }, formats: { value: "percent" } },
-      { label: "From Appreciation", cells: { value: "Returns!H51" }, formats: { value: "percent" } },
-      { label: "Investor Annual ROI", cells: { value: "Returns!H58" }, formats: { value: "percent" }, emphasis: true },
+      {
+        label: "From Cash Flow (Cash-on-Cash)",
+        cells: { value: "Returns!H49" },
+        formats: { value: "percent" },
+      },
+      {
+        label: "From Mortgage Principal Reduction",
+        cells: { value: "Returns!H50" },
+        formats: { value: "percent" },
+      },
+      {
+        label: "From Appreciation",
+        cells: { value: "Returns!H51" },
+        formats: { value: "percent" },
+      },
+      {
+        label: "Investor Annual ROI",
+        cells: { value: "Returns!H58" },
+        formats: { value: "percent" },
+        emphasis: true,
+      },
     ],
   },
   {
     title: "Ownership & Value Outlook",
     rows: [
-      { label: "Percent Ownership", cells: { value: "Returns!D61" }, formats: { value: "percent" } },
-      { label: "Estimated Appreciation / Inflation", cells: { value: "Returns!H61" }, formats: { value: "percent" } },
-      { label: "Value in 5 Years", cells: { value: "Returns!H62" }, formats: { value: "money" } },
-      { label: "Value in 10 Years", cells: { value: "Returns!H63" }, formats: { value: "money" } },
+      {
+        label: "Percent Ownership",
+        cells: { value: "Returns!D61" },
+        formats: { value: "percent" },
+      },
+      {
+        label: "Estimated Appreciation / Inflation",
+        cells: { value: "Returns!H61" },
+        formats: { value: "percent" },
+      },
+      {
+        label: "Value in 5 Years",
+        cells: { value: "Returns!H62" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Value in 10 Years",
+        cells: { value: "Returns!H63" },
+        formats: { value: "money" },
+      },
     ],
   },
   {
     title: "Projection Breakdown",
     rows: [
-      { label: "Capital", cells: { value: "Returns!D72" }, formats: { value: "money" } },
-      { label: "Principal Reduction", cells: { value: "Returns!H76" }, formats: { value: "money" } },
-      { label: "Principal Reduction ROI", cells: { value: "Returns!H77" }, formats: { value: "percent" } },
-      { label: "Property Appreciation", cells: { value: "Returns!H80" }, formats: { value: "money" } },
-      { label: "Appreciation ROI", cells: { value: "Returns!H81" }, formats: { value: "percent" } },
-      { label: "Cash Flow", cells: { value: "Returns!H84" }, formats: { value: "money" } },
-      { label: "Cash Flow ROI", cells: { value: "Returns!H85" }, formats: { value: "percent" } },
-      { label: "Profit (PR + PA + CF)", cells: { value: "Returns!H89" }, formats: { value: "money" } },
-      { label: "ROI (PR + PA + CF)", cells: { value: "Returns!H90" }, formats: { value: "percent" }, emphasis: true },
+      {
+        label: "Capital",
+        cells: { value: "Returns!D72" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Principal Reduction",
+        cells: { value: "Returns!H76" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Principal Reduction ROI",
+        cells: { value: "Returns!H77" },
+        formats: { value: "percent" },
+      },
+      {
+        label: "Property Appreciation",
+        cells: { value: "Returns!H80" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Appreciation ROI",
+        cells: { value: "Returns!H81" },
+        formats: { value: "percent" },
+      },
+      {
+        label: "Cash Flow",
+        cells: { value: "Returns!H84" },
+        formats: { value: "money" },
+      },
+      {
+        label: "Cash Flow ROI",
+        cells: { value: "Returns!H85" },
+        formats: { value: "percent" },
+      },
+      {
+        label: "Profit (PR + PA + CF)",
+        cells: { value: "Returns!H89" },
+        formats: { value: "money" },
+      },
+      {
+        label: "ROI (PR + PA + CF)",
+        cells: { value: "Returns!H90" },
+        formats: { value: "percent" },
+        emphasis: true,
+      },
     ],
   },
 ];
 const REI_RATIO_DEFS = [
   { id: "cap_rate", label: "Cap Rate", format: "percent" },
-  { id: "monthly_cashflow_building", label: "Monthly Cashflow Building", format: "money" },
-  { id: "monthly_per_door_cashflow", label: "Monthly Per Door Cashflow", format: "money" },
-  { id: "cash_on_cash_return", label: "Cash on Cash Return", format: "percent" },
-  { id: "debt_service_coverage_ratio", label: "Debt Service Coverage Ratio (DSCR)", format: "number" },
-  { id: "gross_rent_multiplier", label: "Gross Rent Multiplier (GRM)", format: "number" },
-  { id: "operating_expense_ratio", label: "Operating Expense Ratio (OER)", format: "percent" },
-  { id: "one_percent_rule", label: "1% Rule", format: "percent", threshold: 0.01 },
+  {
+    id: "monthly_cashflow_building",
+    label: "Monthly Cashflow Building",
+    format: "money",
+  },
+  {
+    id: "monthly_per_door_cashflow",
+    label: "Monthly Per Door Cashflow",
+    format: "money",
+  },
+  {
+    id: "cash_on_cash_return",
+    label: "Cash on Cash Return",
+    format: "percent",
+  },
+  {
+    id: "debt_service_coverage_ratio",
+    label: "Debt Service Coverage Ratio (DSCR)",
+    format: "number",
+  },
+  {
+    id: "gross_rent_multiplier",
+    label: "Gross Rent Multiplier (GRM)",
+    format: "number",
+  },
+  {
+    id: "operating_expense_ratio",
+    label: "Operating Expense Ratio (OER)",
+    format: "percent",
+  },
+  {
+    id: "one_percent_rule",
+    label: "1% Rule",
+    format: "percent",
+    threshold: 0.01,
+  },
   {
     id: "purchase_price_break_even_range",
     label: "Purchase Price Cash Flow To Break Even Range",
@@ -506,10 +1028,10 @@ let rentRollDefaultState = null;
 let sensitivityState = {
   rentChangePct: 0,
   interestRateChangeBps: 0,
-  vacancyPct: null,              // null = baseline; decimal e.g. 0.05 = 5%
-  purchasePriceOverride: null,   // null = baseline; absolute dollars
-  gstRebate: "baseline",         // "baseline" | "yes" | "no"
-  scenarios: [],                 // saved scenario objects, max 10
+  vacancyPct: null, // null = baseline; decimal e.g. 0.05 = 5%
+  purchasePriceOverride: null, // null = baseline; absolute dollars
+  gstRebate: "baseline", // "baseline" | "yes" | "no"
+  scenarios: [], // saved scenario objects, max 10
 };
 let sensitivityView = null;
 
@@ -521,7 +1043,7 @@ function setInputMissingState(inputEl, missing) {
   if (!inputEl) return;
   inputEl.classList.toggle("is-missing", missing);
   const parent = inputEl.closest(
-    ".field-row, .rowform-field, .valuation-assumption-row, .valuation-cell, .returns-cell, .rentroll-config-field, td"
+    ".field-row, .rowform-field, .valuation-assumption-row, .valuation-cell, .returns-cell, .rentroll-config-field, td",
   );
   if (parent) parent.classList.toggle("required-missing", missing);
 }
@@ -538,7 +1060,11 @@ function wireInputElement(input, key, required = false) {
     if (VALUATION_RENTROLL_AUTOFILL_KEYS.has(key)) {
       syncValuationRentRollAutofillManualOverrideFlag(key, input);
     }
-    if (key === "Valuation!E11" || key === "Valuation!E12" || key === "Valuation!D5") {
+    if (
+      key === "Valuation!E11" ||
+      key === "Valuation!E12" ||
+      key === "Valuation!D5"
+    ) {
       updateValuationParkingOtherDerivedDisplays();
     }
     updateValidationState();
@@ -557,7 +1083,11 @@ function formatInputValueForDisplay(key, rawValue, displayType = "text") {
   let valueForDisplay = rawValue;
   if (displayType === "percent" && PERCENT_WHOLE_INPUT_KEYS.has(key)) {
     valueForDisplay = normalizeWorkbookInputNumber(key, rawValue, Number.NaN);
-  } else if (displayType === "money" || displayType === "number" || displayType === "compact") {
+  } else if (
+    displayType === "money" ||
+    displayType === "number" ||
+    displayType === "compact"
+  ) {
     valueForDisplay = toNumber(rawValue, Number.NaN);
   }
   return formatDisplayByType(valueForDisplay, displayType);
@@ -567,22 +1097,31 @@ function updateInputDisplayElements(key, rawValue = undefined) {
   const elements = inputDisplayElements.get(key) || [];
   if (!elements.length) return;
   const sourceRawValue =
-    rawValue !== undefined ? rawValue : inputElements.get(key)?.value ?? getInputDefaultValue(key, "");
+    rawValue !== undefined
+      ? rawValue
+      : (inputElements.get(key)?.value ?? getInputDefaultValue(key, ""));
   for (const el of elements) {
     const displayType = el.dataset.format || "text";
-    el.textContent = formatInputValueForDisplay(key, sourceRawValue, displayType);
+    el.textContent = formatInputValueForDisplay(
+      key,
+      sourceRawValue,
+      displayType,
+    );
   }
 }
 
 function registerDerivedMetricElement(metricId, element, format = "text") {
-  if (!derivedMetricElements.has(metricId)) derivedMetricElements.set(metricId, []);
+  if (!derivedMetricElements.has(metricId))
+    derivedMetricElements.set(metricId, []);
   element.dataset.format = format;
   derivedMetricElements.get(metricId).push(element);
 }
 
 function initializeRequiredInputKeys(model) {
   requiredInputKeys.clear();
-  const hiddenSheets = new Set(Array.isArray(model.hidden_sheets) ? model.hidden_sheets : []);
+  const hiddenSheets = new Set(
+    Array.isArray(model.hidden_sheets) ? model.hidden_sheets : [],
+  );
   for (const entry of model.input_cells || []) {
     if (!entry || !entry.key) continue;
     if (hiddenSheets.has(entry.sheet)) continue;
@@ -670,7 +1209,8 @@ function formatNumberValue(value, decimals = 2) {
 }
 
 function toNumber(value, fallback = 0) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+  if (typeof value === "number")
+    return Number.isFinite(value) ? value : fallback;
   if (typeof value === "string") {
     const text = value.trim().replace(/,/g, "");
     if (!text) return fallback;
@@ -824,7 +1364,9 @@ function normalizeRentRollState(state) {
 function buildInitialRentRollState() {
   const propertyCombined = getInputDefaultValue("Valuation!D4", "");
   const property = parsePropertySplit(propertyCombined);
-  const rawUnitCount = String(getInputDefaultValue("Valuation!D5", "") || "").trim();
+  const rawUnitCount = String(
+    getInputDefaultValue("Valuation!D5", "") || "",
+  ).trim();
   const unitCount = rawUnitCount ? toPositiveInt(rawUnitCount, 1) : 0;
 
   const readRentRollNumericInput = (key) => {
@@ -838,8 +1380,12 @@ function buildInitialRentRollState() {
     const excelRow = 6 + idx;
     const row = createEmptyRentUnit(idx);
     if (excelRow <= 13) {
-      row.tenant_name = String(getInputDefaultValue(`Rent Roll!A${excelRow}`, row.tenant_name) || "").trim();
-      row.unit = String(getInputDefaultValue(`Rent Roll!B${excelRow}`, row.unit) || "").trim();
+      row.tenant_name = String(
+        getInputDefaultValue(`Rent Roll!A${excelRow}`, row.tenant_name) || "",
+      ).trim();
+      row.unit = String(
+        getInputDefaultValue(`Rent Roll!B${excelRow}`, row.unit) || "",
+      ).trim();
       row.regular_rent = readRentRollNumericInput(`Rent Roll!C${excelRow}`);
       row.utilities = readRentRollNumericInput(`Rent Roll!D${excelRow}`);
       row.parking = readRentRollNumericInput(`Rent Roll!E${excelRow}`);
@@ -897,7 +1443,10 @@ function setFormulaDisplayLocal(key, value, format = "text") {
       formatted = formatValue(value);
     }
     el.textContent = formatted;
-    el.classList.toggle("error", typeof formatted === "string" && formatted.startsWith("#"));
+    el.classList.toggle(
+      "error",
+      typeof formatted === "string" && formatted.startsWith("#"),
+    );
   }
 }
 
@@ -905,12 +1454,12 @@ function updateValuationParkingOtherDerivedDisplays() {
   const parkingAnnual = normalizeWorkbookInputNumber(
     "Valuation!E11",
     inputElements.get("Valuation!E11")?.value,
-    0
+    0,
   );
   const otherAnnual = normalizeWorkbookInputNumber(
     "Valuation!E12",
     inputElements.get("Valuation!E12")?.value,
-    0
+    0,
   );
 
   const units =
@@ -933,7 +1482,8 @@ function getValuationRentRollAutofillAnnualValue(key) {
   const cfg = VALUATION_RENTROLL_AUTOFILL_KEYS.get(key);
   if (!cfg) return null;
   if (!hasRentRollFieldProvided(cfg.rentRollField)) return null;
-  const annualValue = toNumber(rentRollState?.totals?.[cfg.rentRollField], 0) * 12;
+  const annualValue =
+    toNumber(rentRollState?.totals?.[cfg.rentRollField], 0) * 12;
   return Number(annualValue.toFixed(2));
 }
 
@@ -945,9 +1495,14 @@ function syncValuationRentRollAutofillManualOverrideFlag(key, input) {
     return;
   }
 
-  const currentAnnualValue = normalizeWorkbookInputNumber(key, input.value, Number.NaN);
+  const currentAnnualValue = normalizeWorkbookInputNumber(
+    key,
+    input.value,
+    Number.NaN,
+  );
   const isManualOverride =
-    Number.isFinite(currentAnnualValue) && Math.abs(currentAnnualValue - autofillAnnualValue) > 0.005;
+    Number.isFinite(currentAnnualValue) &&
+    Math.abs(currentAnnualValue - autofillAnnualValue) > 0.005;
   input.dataset.manualRentRollOverride = isManualOverride ? "1" : "0";
 }
 
@@ -958,7 +1513,9 @@ function syncValuationRentRollAutofillInputs() {
 
     const hasSourceValue = hasRentRollFieldProvided(cfg.rentRollField);
     const annualValue = getValuationRentRollAutofillAnnualValue(key);
-    const parent = input.closest(".valuation-cell, .valuation-assumption-row, .field-row, td");
+    const parent = input.closest(
+      ".valuation-cell, .valuation-assumption-row, .field-row, td",
+    );
 
     if (hasSourceValue) {
       const isManualOverride = input.dataset.manualRentRollOverride === "1";
@@ -1058,7 +1615,7 @@ function buildPdfInvestorSummaryItems() {
     notes.push(
       dscrNum < 1.2
         ? "Risk flag: DSCR is below 1.20, indicating tighter debt coverage."
-        : "Strength: DSCR is at or above 1.20, indicating healthier debt coverage."
+        : "Strength: DSCR is at or above 1.20, indicating healthier debt coverage.",
     );
   }
 
@@ -1067,7 +1624,7 @@ function buildPdfInvestorSummaryItems() {
     notes.push(
       monthlyNum < 0
         ? "Risk flag: Monthly cash flow is negative in the current scenario."
-        : "Strength: Monthly cash flow is positive in the current scenario."
+        : "Strength: Monthly cash flow is positive in the current scenario.",
     );
   }
 
@@ -1097,15 +1654,22 @@ function escapeHtml(text) {
 function getReportTabOrder() {
   return Array.from(tabsEl.querySelectorAll(".tab-btn"))
     .map((btn) => btn.dataset.sheet || "")
-    .filter((sheet) => sheet && sheet !== PDF_REPORT_SHEET && !sheet.startsWith("__admin_"));
+    .filter(
+      (sheet) =>
+        sheet && sheet !== PDF_REPORT_SHEET && !sheet.startsWith("__admin_"),
+    );
 }
 
 function buildPrintablePanelHtml(sheetName) {
-  const panel = panelsEl.querySelector(`.sheet-panel[data-sheet="${sheetName}"]`);
+  const panel = panelsEl.querySelector(
+    `.sheet-panel[data-sheet="${sheetName}"]`,
+  );
   if (!panel) return "";
   const clone = panel.cloneNode(true);
 
-  clone.querySelectorAll(".hidden, .panel-search, .btn").forEach((el) => el.remove());
+  clone
+    .querySelectorAll(".hidden, .panel-search, .btn")
+    .forEach((el) => el.remove());
   clone.querySelectorAll("details").forEach((el) => (el.open = true));
 
   clone.querySelectorAll("input, textarea, select").forEach((input) => {
@@ -1114,7 +1678,9 @@ function buildPrintablePanelHtml(sheetName) {
     const raw = input.value ?? "";
     if (input.dataset.percentInput === "1") {
       const num = toNumber(raw, Number.NaN);
-      span.textContent = Number.isFinite(num) ? `${formatNumberValue(num, 2)}%` : "--";
+      span.textContent = Number.isFinite(num)
+        ? `${formatNumberValue(num, 2)}%`
+        : "--";
     } else {
       span.textContent = isPresentValue(raw) ? String(raw) : "--";
     }
@@ -1276,8 +1842,13 @@ function findBestLabel(sheet, cell, cellMap) {
     const row = cell.row - dr;
     if (row < sheet.min_row) break;
     const aboveSameCol = cellMap.get(cellAddress(cell.col, row));
-    if (isLabelCandidate(aboveSameCol)) return normalizeLabel(aboveSameCol.value);
-    for (let c = cell.col - 1; c >= Math.max(sheet.min_col, cell.col - 4); c -= 1) {
+    if (isLabelCandidate(aboveSameCol))
+      return normalizeLabel(aboveSameCol.value);
+    for (
+      let c = cell.col - 1;
+      c >= Math.max(sheet.min_col, cell.col - 4);
+      c -= 1
+    ) {
       const aboveLeft = cellMap.get(cellAddress(c, row));
       if (isLabelCandidate(aboveLeft)) return normalizeLabel(aboveLeft.value);
     }
@@ -1296,7 +1867,8 @@ function detectHeadingRows(sheet, rowTextMap) {
     const text = normalizeLabel(first.value);
     if (!text) continue;
     const uppercaseLike = /^[A-Z0-9 ()/%.-]+$/.test(text);
-    const emphasized = first.fill_id !== 0 || text.endsWith(":") || uppercaseLike;
+    const emphasized =
+      first.fill_id !== 0 || text.endsWith(":") || uppercaseLike;
     if (!emphasized) continue;
     headings.push({ row, label: text.replace(/:$/, "") });
   }
@@ -1358,7 +1930,9 @@ function buildSheetViewModel(sheet) {
   outputs.sort((a, b) => a.row - b.row || a.col - b.col);
 
   const metrics = outputs
-    .filter((f) => typeof f.value === "number" && !f.label.startsWith(sheet.name))
+    .filter(
+      (f) => typeof f.value === "number" && !f.label.startsWith(sheet.name),
+    )
     .slice(0, 4);
 
   return {
@@ -1403,7 +1977,8 @@ function groupFields(fields) {
 function createFieldRow(field) {
   const row = document.createElement("div");
   row.className = "field-row";
-  row.dataset.search = `${field.label} ${field.address} ${field.key}`.toLowerCase();
+  row.dataset.search =
+    `${field.label} ${field.address} ${field.key}`.toLowerCase();
   const isRequired = field.is_input && requiredInputKeys.has(field.key);
   if (isRequired) row.classList.add("required-field");
 
@@ -1439,7 +2014,8 @@ function createFieldRow(field) {
     output.className = "field-output";
     const text = formatValue(field.value);
     output.textContent = text;
-    if (typeof text === "string" && text.startsWith("#")) output.classList.add("error");
+    if (typeof text === "string" && text.startsWith("#"))
+      output.classList.add("error");
     registerFormulaElement(field.key, output);
     row.appendChild(output);
   }
@@ -1471,7 +2047,9 @@ function createFieldGroup(groupName, fields, openByDefault = false) {
 }
 
 function renderValuationKeycards(sheetView, panel) {
-  const outputMap = new Map(sheetView.outputs.map((field) => [field.key, field.value]));
+  const outputMap = new Map(
+    sheetView.outputs.map((field) => [field.key, field.value]),
+  );
   const inputMap = new Map(sheetView.inputs.map((field) => [field.key, field]));
   const resultsWrap = document.createElement("section");
   resultsWrap.className = "valuation-keycards";
@@ -1508,10 +2086,17 @@ function renderValuationKeycards(sheetView, panel) {
     const mainFormat = item.format || "money";
     value.dataset.format = mainFormat;
     if (outputMap.has(item.key)) {
-      value.textContent = formatCalculatedOrBlank(outputMap.get(item.key), mainFormat);
+      value.textContent = formatCalculatedOrBlank(
+        outputMap.get(item.key),
+        mainFormat,
+      );
       registerFormulaElement(item.key, value);
     } else if (inputMap.has(item.key)) {
-      value.textContent = formatInputValueForDisplay(item.key, getInputDefaultValue(item.key, ""), mainFormat);
+      value.textContent = formatInputValueForDisplay(
+        item.key,
+        getInputDefaultValue(item.key, ""),
+        mainFormat,
+      );
       registerInputDisplayElement(item.key, value, mainFormat);
     } else {
       value.textContent = "";
@@ -1529,20 +2114,25 @@ function renderValuationKeycards(sheetView, panel) {
 
       const secondaryValue = document.createElement("span");
       secondaryValue.className = "valuation-keycard-secondary-value";
-      if (item.secondaryFormat) secondaryValue.dataset.format = item.secondaryFormat;
+      if (item.secondaryFormat)
+        secondaryValue.dataset.format = item.secondaryFormat;
       if (outputMap.has(item.secondaryKey)) {
         secondaryValue.textContent = formatCalculatedOrBlank(
           outputMap.get(item.secondaryKey),
-          item.secondaryFormat || "text"
+          item.secondaryFormat || "text",
         );
         registerFormulaElement(item.secondaryKey, secondaryValue);
       } else if (inputMap.has(item.secondaryKey)) {
         secondaryValue.textContent = formatInputValueForDisplay(
           item.secondaryKey,
           getInputDefaultValue(item.secondaryKey, ""),
-          item.secondaryFormat || "text"
+          item.secondaryFormat || "text",
         );
-        registerInputDisplayElement(item.secondaryKey, secondaryValue, item.secondaryFormat || "text");
+        registerInputDisplayElement(
+          item.secondaryKey,
+          secondaryValue,
+          item.secondaryFormat || "text",
+        );
       } else {
         secondaryValue.textContent = "";
       }
@@ -1557,7 +2147,13 @@ function renderValuationKeycards(sheetView, panel) {
   panel.appendChild(resultsWrap);
 }
 
-function renderValuationCellContent(cellKey, columnFormat, inputMap, outputMap, displayFormatOverride = null) {
+function renderValuationCellContent(
+  cellKey,
+  columnFormat,
+  inputMap,
+  outputMap,
+  displayFormatOverride = null,
+) {
   const wrap = document.createElement("div");
   wrap.className = "valuation-cell";
 
@@ -1569,7 +2165,9 @@ function renderValuationCellContent(cellKey, columnFormat, inputMap, outputMap, 
 
   const inputField = inputMap.get(cellKey);
   if (inputField) {
-    const isRequired = requiredInputKeys.has(inputField.key) && isConditionallyRequiredInput(inputField.key);
+    const isRequired =
+      requiredInputKeys.has(inputField.key) &&
+      isConditionallyRequiredInput(inputField.key);
     if (isRequired) wrap.classList.add("required-field");
     const input = document.createElement("input");
     input.className = "field-input valuation-input";
@@ -1596,7 +2194,10 @@ function renderValuationCellContent(cellKey, columnFormat, inputMap, outputMap, 
   if (displayFormat === "percent") output.dataset.format = "percent";
   if (displayFormat === "money") output.dataset.format = "money";
   if (displayFormat === "number") output.dataset.format = "number";
-  output.textContent = formatCalculatedOrBlank(outputField?.value, displayFormat);
+  output.textContent = formatCalculatedOrBlank(
+    outputField?.value,
+    displayFormat,
+  );
   if (outputField) registerFormulaElement(outputField.key, output);
   wrap.appendChild(output);
   return wrap;
@@ -1622,10 +2223,19 @@ function formatCalculatedOrBlank(value, displayType = "text") {
   return formatDisplayByType(value, displayType);
 }
 
-function renderValuationSectionTable(section, inputMap, outputMap, usedInputKeys, usedOutputKeys) {
+function renderValuationSectionTable(
+  section,
+  inputMap,
+  outputMap,
+  usedInputKeys,
+  usedOutputKeys,
+) {
   const block = document.createElement("section");
   block.className = "valuation-section";
-  block.dataset.section = section.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  block.dataset.section = section.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
 
   const title = document.createElement("h4");
   title.className = "valuation-section-title";
@@ -1673,7 +2283,8 @@ function renderValuationSectionTable(section, inputMap, outputMap, usedInputKeys
 
     if (
       rowCfg.description ||
-      (rowCfg.descriptionSupplementals && rowCfg.descriptionSupplementals.length) ||
+      (rowCfg.descriptionSupplementals &&
+        rowCfg.descriptionSupplementals.length) ||
       rowInputHints.length
     ) {
       const note = document.createElement("div");
@@ -1699,11 +2310,16 @@ function renderValuationSectionTable(section, inputMap, outputMap, usedInputKeys
         if (supplemental.key) {
           const supplementalValue = document.createElement("span");
           supplementalValue.className = "valuation-note-value";
-          if (supplemental.format) supplementalValue.dataset.format = supplemental.format;
+          if (supplemental.format)
+            supplementalValue.dataset.format = supplemental.format;
           const supplementalOutput = outputMap.get(supplemental.key);
-          supplementalValue.textContent = formatDisplayByType(supplementalOutput?.value, supplemental.format);
+          supplementalValue.textContent = formatDisplayByType(
+            supplementalOutput?.value,
+            supplemental.format,
+          );
           chunk.appendChild(supplementalValue);
-          if (supplementalOutput) registerFormulaElement(supplementalOutput.key, supplementalValue);
+          if (supplementalOutput)
+            registerFormulaElement(supplementalOutput.key, supplementalValue);
           if (supplemental.key) usedOutputKeys.add(supplemental.key);
         }
 
@@ -1734,10 +2350,19 @@ function renderValuationSectionTable(section, inputMap, outputMap, usedInputKeys
       const displayFormat = rowCfg.formats?.[col.id] || col.format;
       if (key && inputMap.has(key)) {
         usedInputKeys.add(key);
-        if (requiredInputKeys.has(key) && isConditionallyRequiredInput(key)) tr.classList.add("has-required");
+        if (requiredInputKeys.has(key) && isConditionallyRequiredInput(key))
+          tr.classList.add("has-required");
       }
       if (key && outputMap.has(key)) usedOutputKeys.add(key);
-      td.appendChild(renderValuationCellContent(key, col.format, inputMap, outputMap, displayFormat));
+      td.appendChild(
+        renderValuationCellContent(
+          key,
+          col.format,
+          inputMap,
+          outputMap,
+          displayFormat,
+        ),
+      );
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
@@ -1780,7 +2405,10 @@ function renderValuationSecondaryResults(outputMap, usedOutputKeys) {
     valueEl.className = "valuation-output";
     if (rowCfg.format) valueEl.dataset.format = rowCfg.format;
     const outputField = outputMap.get(rowCfg.key);
-    valueEl.textContent = formatCalculatedOrBlank(outputField?.value, rowCfg.format || "text");
+    valueEl.textContent = formatCalculatedOrBlank(
+      outputField?.value,
+      rowCfg.format || "text",
+    );
     if (outputField) registerFormulaElement(outputField.key, valueEl);
     usedOutputKeys.add(rowCfg.key);
     valueTd.appendChild(valueEl);
@@ -1791,13 +2419,15 @@ function renderValuationSecondaryResults(outputMap, usedOutputKeys) {
     if (rowCfg.supplementalKey) {
       const supplementalValue = document.createElement("span");
       supplementalValue.className = "valuation-secondary-supplemental-value";
-      if (rowCfg.supplementalFormat) supplementalValue.dataset.format = rowCfg.supplementalFormat;
+      if (rowCfg.supplementalFormat)
+        supplementalValue.dataset.format = rowCfg.supplementalFormat;
       const supplementalField = outputMap.get(rowCfg.supplementalKey);
       supplementalValue.textContent = formatCalculatedOrBlank(
         supplementalField?.value,
-        rowCfg.supplementalFormat || "text"
+        rowCfg.supplementalFormat || "text",
       );
-      if (supplementalField) registerFormulaElement(supplementalField.key, supplementalValue);
+      if (supplementalField)
+        registerFormulaElement(supplementalField.key, supplementalValue);
       usedOutputKeys.add(rowCfg.supplementalKey);
       supplementalTd.appendChild(supplementalValue);
 
@@ -1844,7 +2474,9 @@ function renderValuationAdditionalDetails(remainingOutputs) {
 
     const value = document.createElement("div");
     value.className = "valuation-additional-value";
-    value.textContent = hasSuccessfulCalculation ? formatValue(field.value) : "";
+    value.textContent = hasSuccessfulCalculation
+      ? formatValue(field.value)
+      : "";
     registerFormulaElement(field.key, value);
     row.appendChild(value);
 
@@ -1871,7 +2503,8 @@ function renderValuationAssumptions(inputFields, usedInputKeys) {
 
   const subtitle = document.createElement("p");
   subtitle.className = "valuation-assumptions-subtitle";
-  subtitle.textContent = "These inputs drive valuation, debt sizing, returns, and sensitivity outputs.";
+  subtitle.textContent =
+    "These inputs drive valuation, debt sizing, returns, and sensitivity outputs.";
   wrap.appendChild(subtitle);
 
   const list = document.createElement("div");
@@ -1902,7 +2535,9 @@ function renderValuationAssumptions(inputFields, usedInputKeys) {
     input.className = "field-input";
     input.type = field.value_type === "number" ? "number" : "text";
     input.step = "any";
-    const isRequired = requiredInputKeys.has(field.key) && isConditionallyRequiredInput(field.key);
+    const isRequired =
+      requiredInputKeys.has(field.key) &&
+      isConditionallyRequiredInput(field.key);
     if (isRequired) {
       row.classList.add("required-field");
       label.classList.add("required-label");
@@ -1957,8 +2592,8 @@ function renderValuationPanel(sheetView, index) {
   const usedInputKeys = new Set();
   const usedOutputKeys = new Set(
     VALUATION_RESULT_FIELDS.flatMap((item) =>
-      item.secondaryKey ? [item.key, item.secondaryKey] : [item.key]
-    )
+      item.secondaryKey ? [item.key, item.secondaryKey] : [item.key],
+    ),
   );
 
   for (const section of VALUATION_SECTIONS) {
@@ -1976,7 +2611,13 @@ function renderValuationPanel(sheetView, index) {
   main.className = "valuation-main";
   for (const section of VALUATION_SECTIONS) {
     main.appendChild(
-      renderValuationSectionTable(section, inputMap, outputMap, usedInputKeys, usedOutputKeys)
+      renderValuationSectionTable(
+        section,
+        inputMap,
+        outputMap,
+        usedInputKeys,
+        usedOutputKeys,
+      ),
     );
   }
   main.appendChild(renderValuationSecondaryResults(outputMap, usedOutputKeys));
@@ -1988,7 +2629,10 @@ function renderValuationPanel(sheetView, index) {
   if (additional) main.appendChild(additional);
 
   layout.appendChild(main);
-  const assumptions = renderValuationAssumptions(sheetView.inputs, usedInputKeys);
+  const assumptions = renderValuationAssumptions(
+    sheetView.inputs,
+    usedInputKeys,
+  );
   if (assumptions) layout.appendChild(assumptions);
 
   panel.appendChild(layout);
@@ -2032,7 +2676,8 @@ function getLiveInputNumber(key, fallback = Number.NaN) {
 }
 
 function getLiveFormulaNumber(key, fallback = Number.NaN) {
-  if (!Object.prototype.hasOwnProperty.call(latestFormulaValues, key)) return fallback;
+  if (!Object.prototype.hasOwnProperty.call(latestFormulaValues, key))
+    return fallback;
   return toNumber(latestFormulaValues[key], fallback);
 }
 
@@ -2084,7 +2729,9 @@ function computeReiRatios() {
   const annualCashflow = getLiveFormulaNumber("Returns!D33", Number.NaN);
   const annualPgi = getLiveFormulaNumber("Valuation!E13", Number.NaN);
   const monthlyIncome = getLiveFormulaNumber("Returns!D18", Number.NaN);
-  const units = rentRollState?.unit_count || toPositiveInt(getLiveInputNumber("Valuation!D5", 0), 0);
+  const units =
+    rentRollState?.unit_count ||
+    toPositiveInt(getLiveInputNumber("Valuation!D5", 0), 0);
 
   out.cap_rate = getLiveFormulaNumber("Valuation!E47", Number.NaN);
   out.monthly_cashflow_building = monthlyCashflow;
@@ -2093,14 +2740,24 @@ function computeReiRatios() {
       ? monthlyCashflow / units
       : Number.NaN;
   out.cash_on_cash_return = getLiveFormulaNumber("Returns!H49", Number.NaN);
-  out.debt_service_coverage_ratio = getLiveFormulaNumber("Valuation!E46", Number.NaN);
+  out.debt_service_coverage_ratio = getLiveFormulaNumber(
+    "Valuation!E46",
+    Number.NaN,
+  );
   out.gross_rent_multiplier =
-    Number.isFinite(purchasePrice) && Number.isFinite(annualPgi) && annualPgi > 0
+    Number.isFinite(purchasePrice) &&
+    Number.isFinite(annualPgi) &&
+    annualPgi > 0
       ? purchasePrice / annualPgi
       : Number.NaN;
-  out.operating_expense_ratio = getLiveFormulaNumber("Valuation!H26", Number.NaN);
+  out.operating_expense_ratio = getLiveFormulaNumber(
+    "Valuation!H26",
+    Number.NaN,
+  );
   out.one_percent_rule =
-    Number.isFinite(monthlyIncome) && Number.isFinite(purchasePrice) && purchasePrice > 0
+    Number.isFinite(monthlyIncome) &&
+    Number.isFinite(purchasePrice) &&
+    purchasePrice > 0
       ? monthlyIncome / purchasePrice
       : Number.NaN;
   out.purchase_price_break_even_range = computePurchasePriceBreakEvenRange();
@@ -2125,8 +2782,14 @@ function updateDerivedMetricElements() {
       if (def.id === "one_percent_rule") {
         const numeric = typeof value === "number" ? value : Number.NaN;
         const threshold = Number(def.threshold || 0.01);
-        el.classList.toggle("ratio-pass", Number.isFinite(numeric) && numeric >= threshold);
-        el.classList.toggle("ratio-fail", Number.isFinite(numeric) && numeric < threshold);
+        el.classList.toggle(
+          "ratio-pass",
+          Number.isFinite(numeric) && numeric >= threshold,
+        );
+        el.classList.toggle(
+          "ratio-fail",
+          Number.isFinite(numeric) && numeric < threshold,
+        );
       }
     }
   }
@@ -2164,25 +2827,39 @@ function monthlyRateFromAnnualCanadian(annualRate) {
   const rate = toNumber(annualRate, Number.NaN);
   if (!Number.isFinite(rate) || rate < 0) return Number.NaN;
   const compoundsPerYear = 2;
-  return Math.exp((Math.log(1 + rate / compoundsPerYear) * compoundsPerYear) / 12) - 1;
+  return (
+    Math.exp((Math.log(1 + rate / compoundsPerYear) * compoundsPerYear) / 12) -
+    1
+  );
 }
 
 function computeMonthlyMortgagePayment(principal, annualRate, amortYears) {
   const loan = toNumber(principal, Number.NaN);
   const years = toNumber(amortYears, Number.NaN);
-  if (!Number.isFinite(loan) || !Number.isFinite(years) || years <= 0 || loan < 0) return Number.NaN;
+  if (
+    !Number.isFinite(loan) ||
+    !Number.isFinite(years) ||
+    years <= 0 ||
+    loan < 0
+  )
+    return Number.NaN;
   const nper = Math.round(years * 12);
   if (nper <= 0) return Number.NaN;
   const monthlyRate = monthlyRateFromAnnualCanadian(annualRate);
   if (!Number.isFinite(monthlyRate)) return Number.NaN;
   if (Math.abs(monthlyRate) < 1e-12) return loan / nper;
   const denominator = 1 - Math.exp(Math.log(1 + monthlyRate) * -nper);
-  if (!Number.isFinite(denominator) || Math.abs(denominator) < 1e-12) return Number.NaN;
+  if (!Number.isFinite(denominator) || Math.abs(denominator) < 1e-12)
+    return Number.NaN;
   return (loan * monthlyRate) / denominator;
 }
 
 function computeAnnualDebtService(principal, annualRate, amortYears) {
-  const payment = computeMonthlyMortgagePayment(principal, annualRate, amortYears);
+  const payment = computeMonthlyMortgagePayment(
+    principal,
+    annualRate,
+    amortYears,
+  );
   if (!Number.isFinite(payment)) return Number.NaN;
   return payment * 12;
 }
@@ -2193,12 +2870,19 @@ function excelPV(rate, nper, pmt, fv = 0, type = 0) {
   const payment = toNumber(pmt, Number.NaN);
   const futureValue = toNumber(fv, 0);
   const paymentType = toNumber(type, 0);
-  if (!Number.isFinite(r) || !Number.isFinite(n) || n <= 0 || !Number.isFinite(payment)) return Number.NaN;
+  if (
+    !Number.isFinite(r) ||
+    !Number.isFinite(n) ||
+    n <= 0 ||
+    !Number.isFinite(payment)
+  )
+    return Number.NaN;
   if (Math.abs(r) < 1e-12) return -(futureValue + payment * n);
   const factor = Math.exp(Math.log(1 + r) * n);
-  return -(
-    futureValue + payment * (1 + r * paymentType) * ((factor - 1) / r)
-  ) / factor;
+  return (
+    -(futureValue + payment * (1 + r * paymentType) * ((factor - 1) / r)) /
+    factor
+  );
 }
 
 function computeYearOnePrincipalReduction(principal, annualRate, amortYears) {
@@ -2206,7 +2890,8 @@ function computeYearOnePrincipalReduction(principal, annualRate, amortYears) {
   if (!Number.isFinite(loan) || loan <= 0) return 0;
   const payment = computeMonthlyMortgagePayment(loan, annualRate, amortYears);
   const monthlyRate = monthlyRateFromAnnualCanadian(annualRate);
-  if (!Number.isFinite(payment) || !Number.isFinite(monthlyRate)) return Number.NaN;
+  if (!Number.isFinite(payment) || !Number.isFinite(monthlyRate))
+    return Number.NaN;
 
   let remaining = loan;
   let paid = 0;
@@ -2228,10 +2913,16 @@ function readSensitivityAssumptions() {
 
   return {
     pgiAnnual: getLiveFormulaNumber("Valuation!E13", Number.NaN),
-    vacancyRate: getLiveInputNumber("Valuation!D14", getLiveFormulaNumber("Returns!C21", Number.NaN)),
+    vacancyRate: getLiveInputNumber(
+      "Valuation!D14",
+      getLiveFormulaNumber("Returns!C21", Number.NaN),
+    ),
     propertyTaxMonthly: getLiveFormulaNumber("Returns!D23", Number.NaN),
     insuranceMonthly: getLiveFormulaNumber("Returns!D24", Number.NaN),
-    utilitiesMonthly: getLiveInputNumber("Returns!D25", getLiveFormulaNumber("Returns!D25", Number.NaN)),
+    utilitiesMonthly: getLiveInputNumber(
+      "Returns!D25",
+      getLiveFormulaNumber("Returns!D25", Number.NaN),
+    ),
     repairsPct: getLiveInputNumber("Returns!C26", Number.NaN),
     propertyManagerPct: getLiveInputNumber("Returns!C27", Number.NaN),
     assetManagerPct: getLiveInputNumber("Returns!C28", Number.NaN),
@@ -2251,7 +2942,8 @@ function readSensitivityAssumptions() {
     baseCashToClose: getLiveFormulaNumber("Returns!D58", Number.NaN),
     baseGstRebateAmount: getLiveFormulaNumber("Returns!D55", 0),
     get baseNonGstClosingCosts() {
-      return Number.isFinite(this.baseCashToClose) && Number.isFinite(this.baseDownPayment)
+      return Number.isFinite(this.baseCashToClose) &&
+        Number.isFinite(this.baseDownPayment)
         ? this.baseCashToClose - this.baseDownPayment - this.baseGstRebateAmount
         : Number.NaN;
     },
@@ -2262,7 +2954,12 @@ function readSensitivityBaselineOutputs() {
   const investorRoi = getLiveFormulaNumber("Returns!H58", Number.NaN);
   const ownership = getLiveInputNumber("Returns!D61", Number.NaN);
   let totalPropertyRoi = getLiveFormulaNumber("Returns!E90", Number.NaN);
-  if (!Number.isFinite(totalPropertyRoi) && Number.isFinite(investorRoi) && Number.isFinite(ownership) && ownership !== 0) {
+  if (
+    !Number.isFinite(totalPropertyRoi) &&
+    Number.isFinite(investorRoi) &&
+    Number.isFinite(ownership) &&
+    ownership !== 0
+  ) {
     totalPropertyRoi = investorRoi / ownership;
   }
 
@@ -2284,13 +2981,20 @@ function computeSensitivityScenarioOutputs(
   interestRateChangeBps,
   vacancyPctOverride = null,
   purchasePriceOverride = null,
-  gstRebate = "baseline"
+  gstRebate = "baseline",
 ) {
   const rentFactor = Math.max(0, 1 + toNumber(rentChangePct, 0));
-  const adjustedRate = Math.max(0, assumptions.marketRate + (toNumber(interestRateChangeBps, 0) / 10000));
+  const adjustedRate = Math.max(
+    0,
+    assumptions.marketRate + toNumber(interestRateChangeBps, 0) / 10000,
+  );
 
-  const effectivePurchasePrice = purchasePriceOverride != null ? purchasePriceOverride : assumptions.purchasePrice;
-  const effectiveVacancyRate = vacancyPctOverride != null ? vacancyPctOverride : assumptions.vacancyRate;
+  const effectivePurchasePrice =
+    purchasePriceOverride != null
+      ? purchasePriceOverride
+      : assumptions.purchasePrice;
+  const effectiveVacancyRate =
+    vacancyPctOverride != null ? vacancyPctOverride : assumptions.vacancyRate;
 
   const monthlyIncome = (assumptions.pgiAnnual * rentFactor) / 12;
   const vacancyMonthly = monthlyIncome * effectiveVacancyRate;
@@ -2303,33 +3007,60 @@ function computeSensitivityScenarioOutputs(
     assumptions.pestMonthly +
     assumptions.advertisingMonthly;
   const variableOpsMonthly =
-    (assumptions.repairsPct + assumptions.propertyManagerPct + assumptions.assetManagerPct) * monthlyIncome;
+    (assumptions.repairsPct +
+      assumptions.propertyManagerPct +
+      assumptions.assetManagerPct) *
+    monthlyIncome;
   const operatingMonthly = fixedOpsMonthly + variableOpsMonthly;
 
   const egiAnnual = (monthlyIncome - vacancyMonthly) * 12;
   const operatingAnnual = operatingMonthly * 12;
   const noiAnnual = egiAnnual - operatingAnnual;
 
-  const valueCap = assumptions.capRate !== 0 ? noiAnnual / assumptions.capRate : Number.NaN;
+  const valueCap =
+    assumptions.capRate !== 0 ? noiAnnual / assumptions.capRate : Number.NaN;
   const maxLoanLtv = assumptions.maxLtv * valueCap;
   const maxLoanLtc = assumptions.maxLtv * effectivePurchasePrice;
-  const availableDebtService = assumptions.requiredDscr !== 0 ? noiAnnual / assumptions.requiredDscr : Number.NaN;
-  const maxLoanDscr = excelPV(adjustedRate / 12, assumptions.amortYears * 12, -(availableDebtService / 12), 0, 0);
+  const availableDebtService =
+    assumptions.requiredDscr !== 0
+      ? noiAnnual / assumptions.requiredDscr
+      : Number.NaN;
+  const maxLoanDscr = excelPV(
+    adjustedRate / 12,
+    assumptions.amortYears * 12,
+    -(availableDebtService / 12),
+    0,
+    0,
+  );
 
-  const validLoanCandidates = [maxLoanLtv, maxLoanLtc, maxLoanDscr].filter((x) => Number.isFinite(x));
-  const lesserLoan = validLoanCandidates.length > 0 ? Math.max(0, Math.min(...validLoanCandidates)) : Number.NaN;
-  const ltc = effectivePurchasePrice !== 0 ? lesserLoan / effectivePurchasePrice : Number.NaN;
+  const validLoanCandidates = [maxLoanLtv, maxLoanLtc, maxLoanDscr].filter(
+    (x) => Number.isFinite(x),
+  );
+  const lesserLoan =
+    validLoanCandidates.length > 0
+      ? Math.max(0, Math.min(...validLoanCandidates))
+      : Number.NaN;
+  const ltc =
+    effectivePurchasePrice !== 0
+      ? lesserLoan / effectivePurchasePrice
+      : Number.NaN;
 
-  const annualDebtService = computeAnnualDebtService(lesserLoan, adjustedRate, assumptions.amortYears);
-  const actualDscr = annualDebtService !== 0 ? noiAnnual / annualDebtService : Number.NaN;
+  const annualDebtService = computeAnnualDebtService(
+    lesserLoan,
+    adjustedRate,
+    assumptions.amortYears,
+  );
+  const actualDscr =
+    annualDebtService !== 0 ? noiAnnual / annualDebtService : Number.NaN;
 
   const loanWithPremium = lesserLoan * (1 + assumptions.cmhcPremiumRate);
   const mortgageMonthly = computeMonthlyMortgagePayment(
     loanWithPremium,
     adjustedRate,
-    assumptions.amortYears
+    assumptions.amortYears,
   );
-  const totalExpensesMonthly = vacancyMonthly + mortgageMonthly + operatingMonthly;
+  const totalExpensesMonthly =
+    vacancyMonthly + mortgageMonthly + operatingMonthly;
   const monthlyCashflow = monthlyIncome - totalExpensesMonthly;
   const annualCashflow = monthlyCashflow * 12;
 
@@ -2342,21 +3073,29 @@ function computeSensitivityScenarioOutputs(
   } else {
     scenarioGstRebate = assumptions.baseGstRebateAmount;
   }
-  const cashToClose = downPayment + assumptions.baseNonGstClosingCosts + scenarioGstRebate;
+  const cashToClose =
+    downPayment + assumptions.baseNonGstClosingCosts + scenarioGstRebate;
 
   const principalReductionYear1 = computeYearOnePrincipalReduction(
     loanWithPremium,
     adjustedRate,
-    assumptions.amortYears
+    assumptions.amortYears,
   );
-  const appreciationGainYear1 = effectivePurchasePrice * assumptions.appreciationRate;
+  const appreciationGainYear1 =
+    effectivePurchasePrice * assumptions.appreciationRate;
 
   const canComputeRoi = Number.isFinite(cashToClose) && cashToClose > 0;
   const cashflowRoi = canComputeRoi ? annualCashflow / cashToClose : Number.NaN;
-  const principalRoi = canComputeRoi ? principalReductionYear1 / cashToClose : Number.NaN;
-  const appreciationRoi = canComputeRoi ? appreciationGainYear1 / cashToClose : Number.NaN;
+  const principalRoi = canComputeRoi
+    ? principalReductionYear1 / cashToClose
+    : Number.NaN;
+  const appreciationRoi = canComputeRoi
+    ? appreciationGainYear1 / cashToClose
+    : Number.NaN;
   const totalPropertyRoi =
-    Number.isFinite(cashflowRoi) && Number.isFinite(principalRoi) && Number.isFinite(appreciationRoi)
+    Number.isFinite(cashflowRoi) &&
+    Number.isFinite(principalRoi) &&
+    Number.isFinite(appreciationRoi)
       ? cashflowRoi + principalRoi + appreciationRoi
       : Number.NaN;
   const investorRoi = totalPropertyRoi * assumptions.ownershipPct;
@@ -2385,7 +3124,8 @@ function updateSensitivityPanel() {
       ? formatPercentValue(currentRate)
       : "--";
     sensitivityView.adjustedRateValue.textContent = "--";
-    if (sensitivityView.addScenarioBtn) sensitivityView.addScenarioBtn.disabled = true;
+    if (sensitivityView.addScenarioBtn)
+      sensitivityView.addScenarioBtn.disabled = true;
     renderSensitivityTable(null, null);
     return;
   }
@@ -2421,22 +3161,27 @@ function updateSensitivityPanel() {
       "Required baseline values are missing. Complete required fields on other tabs and run analysis again.";
     sensitivityView.baseRateValue.textContent = "--";
     sensitivityView.adjustedRateValue.textContent = "--";
-    if (sensitivityView.addScenarioBtn) sensitivityView.addScenarioBtn.disabled = true;
+    if (sensitivityView.addScenarioBtn)
+      sensitivityView.addScenarioBtn.disabled = true;
     renderSensitivityTable(null, null);
     return;
   }
 
   sensitivityView.statusEl.textContent =
     "Scenario values are calculated using current analysis outputs plus your adjustments.";
-  sensitivityView.baseRateValue.textContent = formatPercentValue(assumptions.marketRate);
+  sensitivityView.baseRateValue.textContent = formatPercentValue(
+    assumptions.marketRate,
+  );
   sensitivityView.adjustedRateValue.textContent = formatPercentValue(
-    assumptions.marketRate + (sensitivityState.interestRateChangeBps / 10000)
+    assumptions.marketRate + sensitivityState.interestRateChangeBps / 10000,
   );
 
   const atMax = sensitivityState.scenarios.length >= 10;
   if (sensitivityView.addScenarioBtn) {
     sensitivityView.addScenarioBtn.disabled = atMax;
-    sensitivityView.addScenarioBtn.title = atMax ? "Maximum 10 scenarios reached" : "";
+    sensitivityView.addScenarioBtn.title = atMax
+      ? "Maximum 10 scenarios reached"
+      : "";
   }
 
   renderSensitivityTable(baseline, assumptions);
@@ -2485,7 +3230,7 @@ function renderSensitivityTable(baseline, assumptions) {
     sensitivityState.interestRateChangeBps,
     sensitivityState.vacancyPct,
     sensitivityState.purchasePriceOverride,
-    sensitivityState.gstRebate
+    sensitivityState.gstRebate,
   );
 
   // Build column list: live preview + saved scenarios
@@ -2551,7 +3296,9 @@ function renderSensitivityTable(baseline, assumptions) {
       removeBtn.textContent = "×";
       removeBtn.title = `Remove ${col.label}`;
       removeBtn.addEventListener("click", () => {
-        sensitivityState.scenarios = sensitivityState.scenarios.filter((s) => s !== col.scenarioRef);
+        sensitivityState.scenarios = sensitivityState.scenarios.filter(
+          (s) => s !== col.scenarioRef,
+        );
         updateSensitivityPanel();
       });
       th.appendChild(removeBtn);
@@ -2620,30 +3367,44 @@ function renderSensitivityTable(baseline, assumptions) {
   // Inputs section
   tbody.appendChild(makeSectionHeader("Inputs"));
 
-  tbody.appendChild(makeInputRow("Rent Change", (sc) => {
-    if (!sc.rentChangePct) return "0%";
-    const sign = sc.rentChangePct > 0 ? "+" : "";
-    return `${sign}${(sc.rentChangePct * 100).toFixed(1)}%`;
-  }));
+  tbody.appendChild(
+    makeInputRow("Rent Change", (sc) => {
+      if (!sc.rentChangePct) return "0%";
+      const sign = sc.rentChangePct > 0 ? "+" : "";
+      return `${sign}${(sc.rentChangePct * 100).toFixed(1)}%`;
+    }),
+  );
 
-  tbody.appendChild(makeInputRow("Rate Change (bps)", (sc) => {
-    const bps = sc.interestRateChangeBps || 0;
-    return bps === 0 ? "0 bps" : `${bps > 0 ? "+" : ""}${bps} bps`;
-  }));
+  tbody.appendChild(
+    makeInputRow("Rate Change (bps)", (sc) => {
+      const bps = sc.interestRateChangeBps || 0;
+      return bps === 0 ? "0 bps" : `${bps > 0 ? "+" : ""}${bps} bps`;
+    }),
+  );
 
-  tbody.appendChild(makeInputRow("Vacancy", (sc) => {
-    return sc.vacancyPct != null ? formatPercentValue(sc.vacancyPct) : "Baseline";
-  }));
+  tbody.appendChild(
+    makeInputRow("Vacancy", (sc) => {
+      return sc.vacancyPct != null
+        ? formatPercentValue(sc.vacancyPct)
+        : "Baseline";
+    }),
+  );
 
-  tbody.appendChild(makeInputRow("Purchase Price", (sc) => {
-    return sc.purchasePriceOverride != null ? `$${formatMoney(sc.purchasePriceOverride)}` : "Baseline";
-  }));
+  tbody.appendChild(
+    makeInputRow("Purchase Price", (sc) => {
+      return sc.purchasePriceOverride != null
+        ? `$${formatMoney(sc.purchasePriceOverride)}`
+        : "Baseline";
+    }),
+  );
 
-  tbody.appendChild(makeInputRow("GST Rebate", (sc) => {
-    if (sc.gstRebate === "yes") return "Yes";
-    if (sc.gstRebate === "no") return "No";
-    return "Baseline";
-  }));
+  tbody.appendChild(
+    makeInputRow("GST Rebate", (sc) => {
+      if (sc.gstRebate === "yes") return "Yes";
+      if (sc.gstRebate === "no") return "No";
+      return "Baseline";
+    }),
+  );
 
   // Outputs section
   tbody.appendChild(makeSectionHeader("Outputs"));
@@ -2659,26 +3420,37 @@ function renderSensitivityTable(baseline, assumptions) {
 
     const tdBase = document.createElement("td");
     tdBase.className = "sensitivity-base";
-    tdBase.textContent = Number.isFinite(baseValue) ? formatDisplayByType(baseValue, field.format) : "--";
+    tdBase.textContent = Number.isFinite(baseValue)
+      ? formatDisplayByType(baseValue, field.format)
+      : "--";
     tr.appendChild(tdBase);
 
     for (const col of allCols) {
       const scenarioValue = col.outputs[field.id];
-      const delta = Number.isFinite(baseValue) && Number.isFinite(scenarioValue)
-        ? scenarioValue - baseValue : Number.NaN;
+      const delta =
+        Number.isFinite(baseValue) && Number.isFinite(scenarioValue)
+          ? scenarioValue - baseValue
+          : Number.NaN;
 
       const tdVal = document.createElement("td");
       tdVal.className = "sensitivity-scenario";
       if (col.isLive) tdVal.classList.add("sensitivity-scenario--live");
       tdVal.textContent = Number.isFinite(scenarioValue)
-        ? formatDisplayByType(scenarioValue, field.format) : "--";
+        ? formatDisplayByType(scenarioValue, field.format)
+        : "--";
       tr.appendChild(tdVal);
 
       const tdDelta = document.createElement("td");
       tdDelta.className = "sensitivity-delta";
       tdDelta.textContent = formatSignedByType(delta, field.format);
-      tdDelta.classList.toggle("delta-positive", Number.isFinite(delta) && delta > 0);
-      tdDelta.classList.toggle("delta-negative", Number.isFinite(delta) && delta < 0);
+      tdDelta.classList.toggle(
+        "delta-positive",
+        Number.isFinite(delta) && delta > 0,
+      );
+      tdDelta.classList.toggle(
+        "delta-negative",
+        Number.isFinite(delta) && delta < 0,
+      );
       tr.appendChild(tdDelta);
     }
 
@@ -2782,15 +3554,21 @@ function renderSensitivityPanel(sheetView, index) {
   const priceInput = controls.querySelector("#sensitivity-purchase-price");
   const gstSelect = controls.querySelector("#sensitivity-gst-rebate");
   const baseRateValue = controls.querySelector("#sensitivity-base-rate");
-  const adjustedRateValue = controls.querySelector("#sensitivity-adjusted-rate");
+  const adjustedRateValue = controls.querySelector(
+    "#sensitivity-adjusted-rate",
+  );
 
   // Restore live state
   rentInput.value = formatPercentInput(sensitivityState.rentChangePct);
   rateInput.value = formatBpsInput(sensitivityState.interestRateChangeBps);
-  vacancyInput.value = sensitivityState.vacancyPct != null
-    ? String(sensitivityState.vacancyPct * 100) : "";
-  priceInput.value = sensitivityState.purchasePriceOverride != null
-    ? String(sensitivityState.purchasePriceOverride) : "";
+  vacancyInput.value =
+    sensitivityState.vacancyPct != null
+      ? String(sensitivityState.vacancyPct * 100)
+      : "";
+  priceInput.value =
+    sensitivityState.purchasePriceOverride != null
+      ? String(sensitivityState.purchasePriceOverride)
+      : "";
   gstSelect.value = sensitivityState.gstRebate;
 
   rentInput.addEventListener("input", () => {
@@ -2808,7 +3586,8 @@ function renderSensitivityPanel(sheetView, index) {
   });
   priceInput.addEventListener("input", () => {
     const raw = priceInput.value.trim();
-    sensitivityState.purchasePriceOverride = raw === "" ? null : toNumber(raw, 0);
+    sensitivityState.purchasePriceOverride =
+      raw === "" ? null : toNumber(raw, 0);
     updateSensitivityPanel();
   });
   gstSelect.addEventListener("change", () => {
@@ -2818,7 +3597,8 @@ function renderSensitivityPanel(sheetView, index) {
 
   // Add Scenario button
   addBtn.addEventListener("click", () => {
-    if (sensitivityState.scenarios.length >= 10 || !hasSuccessfulCalculation) return;
+    if (sensitivityState.scenarios.length >= 10 || !hasSuccessfulCalculation)
+      return;
     const assumptions = readSensitivityAssumptions();
     const outputs = computeSensitivityScenarioOutputs(
       assumptions,
@@ -2826,7 +3606,7 @@ function renderSensitivityPanel(sheetView, index) {
       sensitivityState.interestRateChangeBps,
       sensitivityState.vacancyPct,
       sensitivityState.purchasePriceOverride,
-      sensitivityState.gstRebate
+      sensitivityState.gstRebate,
     );
     sensitivityState.scenarios.push({
       label: `Scenario ${sensitivityState.scenarios.length + 1}`,
@@ -2900,7 +3680,9 @@ function renderReiRatiosSection(titleText, subtitleText = "") {
 
 function renderReturnsKeyResults(sheetView, panel) {
   const inputMap = new Map(sheetView.inputs.map((field) => [field.key, field]));
-  const outputMap = new Map(sheetView.outputs.map((field) => [field.key, field]));
+  const outputMap = new Map(
+    sheetView.outputs.map((field) => [field.key, field]),
+  );
 
   const wrap = document.createElement("section");
   wrap.className = "returns-keycards";
@@ -2926,11 +3708,18 @@ function renderReturnsKeyResults(sheetView, panel) {
     value.dataset.format = item.format || "text";
 
     if (inputMap.has(item.key)) {
-      value.textContent = formatInputValueForDisplay(item.key, getInputDefaultValue(item.key, ""), item.format || "text");
+      value.textContent = formatInputValueForDisplay(
+        item.key,
+        getInputDefaultValue(item.key, ""),
+        item.format || "text",
+      );
       registerInputDisplayElement(item.key, value, item.format || "text");
     } else if (outputMap.has(item.key)) {
       const out = outputMap.get(item.key);
-      value.textContent = formatCalculatedOrBlank(out?.value, item.format || "text");
+      value.textContent = formatCalculatedOrBlank(
+        out?.value,
+        item.format || "text",
+      );
       registerFormulaElement(item.key, value);
     } else {
       value.textContent = "";
@@ -2943,7 +3732,14 @@ function renderReturnsKeyResults(sheetView, panel) {
   panel.appendChild(wrap);
 }
 
-function renderReturnsCellContent(cellKey, formatType, inputMap, outputMap, usedInputKeys, usedOutputKeys) {
+function renderReturnsCellContent(
+  cellKey,
+  formatType,
+  inputMap,
+  outputMap,
+  usedInputKeys,
+  usedOutputKeys,
+) {
   const wrap = document.createElement("div");
   wrap.className = "returns-cell";
 
@@ -2978,7 +3774,10 @@ function renderReturnsCellContent(cellKey, formatType, inputMap, outputMap, used
   const output = document.createElement("div");
   output.className = "returns-output";
   output.dataset.format = formatType || "text";
-  output.textContent = formatCalculatedOrBlank(outputField?.value, formatType || "text");
+  output.textContent = formatCalculatedOrBlank(
+    outputField?.value,
+    formatType || "text",
+  );
   if (outputField) {
     registerFormulaElement(outputField.key, output);
     usedOutputKeys.add(outputField.key);
@@ -2987,7 +3786,13 @@ function renderReturnsCellContent(cellKey, formatType, inputMap, outputMap, used
   return wrap;
 }
 
-function renderReturnsSectionTable(section, inputMap, outputMap, usedInputKeys, usedOutputKeys) {
+function renderReturnsSectionTable(
+  section,
+  inputMap,
+  outputMap,
+  usedInputKeys,
+  usedOutputKeys,
+) {
   const block = document.createElement("section");
   block.className = "returns-section";
 
@@ -3028,9 +3833,17 @@ function renderReturnsSectionTable(section, inputMap, outputMap, usedInputKeys, 
       const td = document.createElement("td");
       const key = rowCfg.cells?.[col.id] || null;
       const formatType = rowCfg.formats?.[col.id] || col.format || "text";
-      if (key && inputMap.has(key) && requiredInputKeys.has(key)) tr.classList.add("has-required");
+      if (key && inputMap.has(key) && requiredInputKeys.has(key))
+        tr.classList.add("has-required");
       td.appendChild(
-        renderReturnsCellContent(key, formatType, inputMap, outputMap, usedInputKeys, usedOutputKeys)
+        renderReturnsCellContent(
+          key,
+          formatType,
+          inputMap,
+          outputMap,
+          usedInputKeys,
+          usedOutputKeys,
+        ),
       );
       tr.appendChild(td);
     }
@@ -3083,14 +3896,20 @@ function renderReturnsPanel(sheetView, index) {
   main.className = "returns-main";
   for (const section of RETURNS_SECTIONS) {
     main.appendChild(
-      renderReturnsSectionTable(section, inputMap, outputMap, usedInputKeys, usedOutputKeys)
+      renderReturnsSectionTable(
+        section,
+        inputMap,
+        outputMap,
+        usedInputKeys,
+        usedOutputKeys,
+      ),
     );
   }
   main.appendChild(
     renderReiRatiosSection(
       "REI Ratios",
-      "Calculated from the current underwriting run."
-    )
+      "Calculated from the current underwriting run.",
+    ),
   );
   layout.appendChild(main);
 
@@ -3101,15 +3920,21 @@ function renderReturnsPanel(sheetView, index) {
     .filter((field) => !usedInputKeys.has(field.key))
     .sort((a, b) => a.row - b.row || a.col - b.col);
   if (remainingInputs.length) {
-    side.appendChild(createFieldGroup("Additional Returns Inputs", remainingInputs, false));
+    side.appendChild(
+      createFieldGroup("Additional Returns Inputs", remainingInputs, false),
+    );
   }
 
   const remainingOutputs = sheetView.outputs
     .filter((field) => !usedOutputKeys.has(field.key))
     .sort((a, b) => a.row - b.row || a.col - b.col)
-    .map((field) => (hasSuccessfulCalculation ? field : { ...field, value: "" }));
+    .map((field) =>
+      hasSuccessfulCalculation ? field : { ...field, value: "" },
+    );
   if (remainingOutputs.length) {
-    side.appendChild(createFieldGroup("Additional Returns Outputs", remainingOutputs, false));
+    side.appendChild(
+      createFieldGroup("Additional Returns Outputs", remainingOutputs, false),
+    );
   }
 
   if (side.children.length > 0) layout.appendChild(side);
@@ -3117,17 +3942,22 @@ function renderReturnsPanel(sheetView, index) {
 
   search.addEventListener("input", () => {
     const query = search.value.trim().toLowerCase();
-    panel.querySelectorAll(".returns-section tbody tr, .rei-ratios-table tbody tr, .field-row").forEach((row) => {
-      if (!query) {
-        row.classList.remove("hidden");
-        return;
-      }
-      const text = row.textContent.toLowerCase();
-      row.classList.toggle("hidden", !text.includes(query));
-    });
+    panel
+      .querySelectorAll(
+        ".returns-section tbody tr, .rei-ratios-table tbody tr, .field-row",
+      )
+      .forEach((row) => {
+        if (!query) {
+          row.classList.remove("hidden");
+          return;
+        }
+        const text = row.textContent.toLowerCase();
+        row.classList.toggle("hidden", !text.includes(query));
+      });
 
     panel.querySelectorAll(".field-group").forEach((group) => {
-      const anyVisible = group.querySelector(".field-row:not(.hidden)") !== null;
+      const anyVisible =
+        group.querySelector(".field-row:not(.hidden)") !== null;
       group.classList.toggle("hidden", !anyVisible);
     });
   });
@@ -3148,7 +3978,8 @@ function renderReiRatiosPanel() {
   h2.textContent = "REI Ratios";
   const subtitle = document.createElement("p");
   subtitle.className = "panel-subtitle";
-  subtitle.textContent = "Standalone investment ratio view from the current underwriting scenario.";
+  subtitle.textContent =
+    "Standalone investment ratio view from the current underwriting scenario.";
   titleWrap.appendChild(h2);
   titleWrap.appendChild(subtitle);
   header.appendChild(titleWrap);
@@ -3157,8 +3988,8 @@ function renderReiRatiosPanel() {
   panel.appendChild(
     renderReiRatiosSection(
       "Core Real Estate Investment Ratios",
-      "Run Analysis after changing inputs to refresh ratio values."
-    )
+      "Run Analysis after changing inputs to refresh ratio values.",
+    ),
   );
 
   return panel;
@@ -3195,7 +4026,7 @@ function renderGenericSheetPanel(sheetView, index) {
     for (const metricField of sheetView.metrics) {
       const { card, valueEl } = createMetricCard(
         metricField.label,
-        formatCompactValue(metricField.value)
+        formatCompactValue(metricField.value),
       );
       valueEl.classList.add("metric-live");
       registerFormulaElement(metricField.key, valueEl);
@@ -3218,7 +4049,9 @@ function renderGenericSheetPanel(sheetView, index) {
     inputColumn.appendChild(empty);
   } else {
     inputGroups.forEach((group, idx) =>
-      inputColumn.appendChild(createFieldGroup(group.name, group.items, idx === 0))
+      inputColumn.appendChild(
+        createFieldGroup(group.name, group.items, idx === 0),
+      ),
     );
   }
 
@@ -3227,7 +4060,9 @@ function renderGenericSheetPanel(sheetView, index) {
   outputColumn.innerHTML = `<h3 class="column-header">Calculated Outputs</h3>`;
   const outputGroups = groupFields(sheetView.outputs);
   outputGroups.forEach((group, idx) =>
-    outputColumn.appendChild(createFieldGroup(group.name, group.items, idx === 0))
+    outputColumn.appendChild(
+      createFieldGroup(group.name, group.items, idx === 0),
+    ),
   );
 
   layout.appendChild(inputColumn);
@@ -3249,7 +4084,8 @@ function renderGenericSheetPanel(sheetView, index) {
     });
 
     panel.querySelectorAll(".field-group").forEach((group) => {
-      const anyVisible = group.querySelector(".field-row:not(.hidden)") !== null;
+      const anyVisible =
+        group.querySelector(".field-row:not(.hidden)") !== null;
       group.classList.toggle("hidden", !anyVisible);
     });
   });
@@ -3278,7 +4114,8 @@ function buildRowFormRows(sheetView) {
       rowNumber,
       fields,
       title: labels[0] || `Row ${rowNumber}`,
-      searchText: `${labels.join(" ")} ${fields.map((f) => `${f.address} ${f.key}`).join(" ")}`.toLowerCase(),
+      searchText:
+        `${labels.join(" ")} ${fields.map((f) => `${f.address} ${f.key}`).join(" ")}`.toLowerCase(),
     });
   }
   rows.sort((a, b) => a.rowNumber - b.rowNumber);
@@ -3318,7 +4155,8 @@ function createRowFormField(field) {
     output.className = "field-output";
     const text = formatValue(field.value);
     output.textContent = text;
-    if (typeof text === "string" && text.startsWith("#")) output.classList.add("error");
+    if (typeof text === "string" && text.startsWith("#"))
+      output.classList.add("error");
     wrap.appendChild(output);
     registerFormulaElement(field.key, output);
   }
@@ -3358,7 +4196,7 @@ function renderRowFormSheetPanel(sheetView, index) {
     for (const metricField of sheetView.metrics) {
       const { card, valueEl } = createMetricCard(
         metricField.label,
-        formatCompactValue(metricField.value)
+        formatCompactValue(metricField.value),
       );
       valueEl.classList.add("metric-live");
       registerFormulaElement(metricField.key, valueEl);
@@ -3478,11 +4316,36 @@ function renderRentRollPanel(index) {
   const summary = document.createElement("div");
   summary.className = "rentroll-summary";
   const summaryCards = [
-    { label: "Total Utilities", key: "Rent Roll!E15", totalKey: "utilities", formula: true },
-    { label: "Total Parking", key: "rr-total-parking", totalKey: "parking", formula: false },
-    { label: "Total Pet Fee", key: "rr-total-pet", totalKey: "pet_fee", formula: false },
-    { label: "Total Rent", key: "Rent Roll!I15", totalKey: "total_rent", formula: true },
-    { label: "Projected Rent Total", key: "Rent Roll!J15", totalKey: "projected_rent", formula: true },
+    {
+      label: "Total Utilities",
+      key: "Rent Roll!E15",
+      totalKey: "utilities",
+      formula: true,
+    },
+    {
+      label: "Total Parking",
+      key: "rr-total-parking",
+      totalKey: "parking",
+      formula: false,
+    },
+    {
+      label: "Total Pet Fee",
+      key: "rr-total-pet",
+      totalKey: "pet_fee",
+      formula: false,
+    },
+    {
+      label: "Total Rent",
+      key: "Rent Roll!I15",
+      totalKey: "total_rent",
+      formula: true,
+    },
+    {
+      label: "Projected Rent Total",
+      key: "Rent Roll!J15",
+      totalKey: "projected_rent",
+      formula: true,
+    },
   ];
   const summaryValueEls = {};
   for (const item of summaryCards) {
@@ -3532,11 +4395,21 @@ function renderRentRollPanel(index) {
     recalcRentRollTotals();
     syncValuationRentRollAutofillInputs();
     subtitle.textContent = `${rentRollState.unit_count} units configured`;
-    summaryValueEls.utilities.textContent = formatMoney(rentRollState.totals.utilities);
-    summaryValueEls.parking.textContent = formatMoney(rentRollState.totals.parking);
-    summaryValueEls.pet_fee.textContent = formatMoney(rentRollState.totals.pet_fee);
-    summaryValueEls.total_rent.textContent = formatMoney(rentRollState.totals.total_rent);
-    summaryValueEls.projected_rent.textContent = formatMoney(rentRollState.totals.projected_rent);
+    summaryValueEls.utilities.textContent = formatMoney(
+      rentRollState.totals.utilities,
+    );
+    summaryValueEls.parking.textContent = formatMoney(
+      rentRollState.totals.parking,
+    );
+    summaryValueEls.pet_fee.textContent = formatMoney(
+      rentRollState.totals.pet_fee,
+    );
+    summaryValueEls.total_rent.textContent = formatMoney(
+      rentRollState.totals.total_rent,
+    );
+    summaryValueEls.projected_rent.textContent = formatMoney(
+      rentRollState.totals.projected_rent,
+    );
   }
 
   function renderRows() {
@@ -3595,11 +4468,14 @@ function renderRentRollPanel(index) {
 
   nameInput.value = rentRollState.property_name;
   addressInput.value = rentRollState.property_address;
-  unitsInput.value = rentRollState.unit_count > 0 ? String(rentRollState.unit_count) : "";
-  config.querySelectorAll(".rentroll-config-field").forEach((field) =>
-    field.classList.add("required-field")
-  );
-  config.querySelectorAll("label").forEach((label) => label.classList.add("required-label"));
+  unitsInput.value =
+    rentRollState.unit_count > 0 ? String(rentRollState.unit_count) : "";
+  config
+    .querySelectorAll(".rentroll-config-field")
+    .forEach((field) => field.classList.add("required-field"));
+  config
+    .querySelectorAll("label")
+    .forEach((label) => label.classList.add("required-label"));
 
   nameInput.addEventListener("input", () => {
     rentRollState.property_name = String(nameInput.value || "").trim();
@@ -3666,9 +4542,18 @@ function renderAdminMortgagePanel(payload) {
 
   const metrics = document.createElement("div");
   metrics.className = "sheet-quick-metrics";
-  const totalCard = createMetricCard("Mortgage Formulas", String(payload.total_records || 0));
-  const overrideCard = createMetricCard("Active Overrides", String(payload.overrides_count || 0));
-  const pathCard = createMetricCard("Override File", payload.overrides_path || "N/A");
+  const totalCard = createMetricCard(
+    "Mortgage Formulas",
+    String(payload.total_records || 0),
+  );
+  const overrideCard = createMetricCard(
+    "Active Overrides",
+    String(payload.overrides_count || 0),
+  );
+  const pathCard = createMetricCard(
+    "Override File",
+    payload.overrides_path || "N/A",
+  );
   pathCard.card.classList.add("metric-wide");
   metrics.appendChild(totalCard.card);
   metrics.appendChild(overrideCard.card);
@@ -3695,7 +4580,8 @@ function renderAdminMortgagePanel(payload) {
     const row = document.createElement("div");
     row.className = "admin-row";
     if (record.is_overridden) row.classList.add("override");
-    row.dataset.search = `${record.key} ${record.address} ${record.current_formula}`.toLowerCase();
+    row.dataset.search =
+      `${record.key} ${record.address} ${record.current_formula}`.toLowerCase();
 
     const labelWrap = document.createElement("div");
     labelWrap.className = "field-label";
@@ -3717,7 +4603,8 @@ function renderAdminMortgagePanel(payload) {
     input.dataset.defaultFormula = record.default_formula;
     input.dataset.currentFormula = record.current_formula;
     input.addEventListener("input", () => {
-      const changed = input.value.trim() !== (input.dataset.currentFormula || "");
+      const changed =
+        input.value.trim() !== (input.dataset.currentFormula || "");
       row.classList.toggle("changed", changed);
     });
     row.appendChild(input);
@@ -3760,11 +4647,15 @@ function renderAdminMortgagePanel(payload) {
         headers: authHeaders(),
         body: JSON.stringify({ overrides }),
       });
-      if (response.status === 401) { showLogin("Session expired. Please sign in again."); return; }
+      if (response.status === 401) {
+        showLogin("Session expired. Please sign in again.");
+        return;
+      }
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Failed to save overrides");
+      if (!response.ok)
+        throw new Error(data.error || "Failed to save overrides");
       setStatus(
-        `Mortgage overrides saved (${data.overrides_count} active). Refreshing admin catalog...`
+        `Mortgage overrides saved (${data.overrides_count} active). Refreshing admin catalog...`,
       );
       await loadAdminMortgageData(true);
     } catch (error) {
@@ -3783,12 +4674,19 @@ async function loadAdminMortgageData(preserveTab = false) {
     : "";
 
   const response = await fetch(adminMortgageUrl, { headers: authHeaders() });
-  if (response.status === 401) { showLogin("Session expired. Please sign in again."); return; }
+  if (response.status === 401) {
+    showLogin("Session expired. Please sign in again.");
+    return;
+  }
   if (!response.ok) throw new Error("Failed to load mortgage admin data");
   const payload = await response.json();
 
-  const oldTab = tabsEl.querySelector('.tab-btn[data-sheet="__admin_mortgage"]');
-  const oldPanel = panelsEl.querySelector('.sheet-panel[data-sheet="__admin_mortgage"]');
+  const oldTab = tabsEl.querySelector(
+    '.tab-btn[data-sheet="__admin_mortgage"]',
+  );
+  const oldPanel = panelsEl.querySelector(
+    '.sheet-panel[data-sheet="__admin_mortgage"]',
+  );
   if (oldTab) oldTab.remove();
   if (oldPanel) oldPanel.remove();
 
@@ -3846,13 +4744,13 @@ function renderWorkbook(model) {
         ? renderRentRollPanel(renderIndex)
         : sheetView.name === "Valuation"
           ? renderValuationPanel(sheetView, renderIndex)
-        : sheetView.name === "Returns"
-          ? renderReturnsPanel(sheetView, renderIndex)
-        : sheetView.name === "Sensitivity Analysis"
-          ? renderSensitivityPanel(sheetView, renderIndex)
-        : ROW_FORM_SHEETS.has(sheetView.name)
-          ? renderRowFormSheetPanel(sheetView, renderIndex)
-          : renderGenericSheetPanel(sheetView, renderIndex);
+          : sheetView.name === "Returns"
+            ? renderReturnsPanel(sheetView, renderIndex)
+            : sheetView.name === "Sensitivity Analysis"
+              ? renderSensitivityPanel(sheetView, renderIndex)
+              : ROW_FORM_SHEETS.has(sheetView.name)
+                ? renderRowFormSheetPanel(sheetView, renderIndex)
+                : renderGenericSheetPanel(sheetView, renderIndex);
     panelsEl.appendChild(panel);
     renderIndex += 1;
   }
@@ -3896,7 +4794,7 @@ function validateWorkbookRequiredInputs() {
     input.classList.toggle("is-required", isRequired);
     input.dataset.required = isRequired ? "1" : "0";
     const parent = input.closest(
-      ".field-row, .rowform-field, .valuation-assumption-row, .valuation-cell, .returns-cell, td"
+      ".field-row, .rowform-field, .valuation-assumption-row, .valuation-cell, .returns-cell, td",
     );
     if (parent) parent.classList.toggle("required-field", isRequired);
     if (!isRequired) {
@@ -3911,7 +4809,9 @@ function validateWorkbookRequiredInputs() {
 }
 
 function validateRentRollRequiredInputs() {
-  const panel = panelsEl.querySelector('.rentroll-panel[data-sheet="Rent Roll"]');
+  const panel = panelsEl.querySelector(
+    '.rentroll-panel[data-sheet="Rent Roll"]',
+  );
   if (!panel) return 0;
 
   let missing = 0;
@@ -3963,7 +4863,8 @@ async function resetInputs() {
     const exists = document.querySelector(`.tab-btn[data-sheet="${active}"]`);
     if (exists) activateSheet(active);
   }
-  if (adminSummaryValueEl) adminSummaryValueEl.textContent = isAdminMode() ? "Admin" : "Analyst";
+  if (adminSummaryValueEl)
+    adminSummaryValueEl.textContent = isAdminMode() ? "Admin" : "Analyst";
   if (globalLastRunValueEl) globalLastRunValueEl.textContent = "Not run";
   setStatus("Inputs reset.");
   updateValidationState();
@@ -3983,13 +4884,19 @@ function renderFormulaUpdates(formulaValues) {
         formatted = formatNumberValue(value);
       } else if (el.dataset.format === "compact") {
         formatted = formatCompactValue(value);
-      } else if (el.classList.contains("metric-value") || el.classList.contains("metric-live")) {
+      } else if (
+        el.classList.contains("metric-value") ||
+        el.classList.contains("metric-live")
+      ) {
         formatted = formatCompactValue(value);
       } else {
         formatted = formatValue(value);
       }
       el.textContent = formatted;
-      el.classList.toggle("error", typeof formatted === "string" && formatted.startsWith("#"));
+      el.classList.toggle(
+        "error",
+        typeof formatted === "string" && formatted.startsWith("#"),
+      );
     }
   }
   updateSensitivityPanel();
@@ -4002,7 +4909,9 @@ async function calculate() {
   calculateBtn.disabled = true;
   setStatus("Running analysis...");
   try {
-    rentRollState = normalizeRentRollState(rentRollState || rentRollDefaultState || buildInitialRentRollState());
+    rentRollState = normalizeRentRollState(
+      rentRollState || rentRollDefaultState || buildInitialRentRollState(),
+    );
     const response = await fetch(calculateUrl, {
       method: "POST",
       headers: authHeaders(),
@@ -4011,7 +4920,10 @@ async function calculate() {
         rent_roll: rentRollPayload(),
       }),
     });
-    if (response.status === 401) { showLogin("Session expired. Please sign in again."); return; }
+    if (response.status === 401) {
+      showLogin("Session expired. Please sign in again.");
+      return;
+    }
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Calculation failed");
 
@@ -4033,7 +4945,10 @@ async function calculate() {
 async function bootstrap() {
   setStatus("Loading underwriting model...");
   const response = await fetch(modelUrl, { headers: authHeaders() });
-  if (response.status === 401) { showLogin("Session expired. Please sign in again."); return; }
+  if (response.status === 401) {
+    showLogin("Session expired. Please sign in again.");
+    return;
+  }
   if (!response.ok) {
     setStatus("Failed to load model metadata.");
     return;
@@ -4048,7 +4963,9 @@ async function bootstrap() {
     const hidden = Array.isArray(workbookModel.hidden_sheets)
       ? workbookModel.hidden_sheets.join(", ")
       : "Mortgage";
-    setStatus(`Loaded ${workbookModel.sheets.length} tabs. Hidden internal sheets: ${hidden}.`);
+    setStatus(
+      `Loaded ${workbookModel.sheets.length} tabs. Hidden internal sheets: ${hidden}.`,
+    );
   }
   updateValidationState();
 }
