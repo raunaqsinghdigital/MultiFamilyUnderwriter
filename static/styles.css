@@ -1784,6 +1784,28 @@ body {
   padding: 8px 12px;
 }
 
+.login-success {
+  margin: 4px 0 0;
+  font-size: 0.87rem;
+  color: #065f46;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.forgot-password-link {
+  font-size: 0.84rem;
+  color: var(--brand);
+  text-decoration: none;
+  text-align: center;
+  margin-top: 2px;
+}
+
+.forgot-password-link:hover {
+  text-decoration: underline;
+}
+
 /* ── Product selector nav ──────────────────────────────────────────────────── */
 .product-nav {
   display: flex;

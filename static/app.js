@@ -141,10 +141,58 @@ async function handleSignOut() {
 
 function showSetPassword() {
   document.getElementById("sign-in-view")?.setAttribute("hidden", "");
+  document.getElementById("forgot-password-view")?.setAttribute("hidden", "");
   document.getElementById("set-password-view")?.removeAttribute("hidden");
   document.getElementById("login-overlay")?.removeAttribute("hidden");
   document.getElementById("app-shell")?.setAttribute("hidden", "");
   document.getElementById("user-chip")?.setAttribute("hidden", "");
+}
+
+function showForgotPassword() {
+  document.getElementById("sign-in-view")?.setAttribute("hidden", "");
+  document.getElementById("set-password-view")?.setAttribute("hidden", "");
+  document.getElementById("forgot-password-view")?.removeAttribute("hidden");
+  const errEl = document.getElementById("forgot-password-error");
+  if (errEl) errEl.setAttribute("hidden", "");
+  const successEl = document.getElementById("forgot-password-success");
+  if (successEl) successEl.setAttribute("hidden", "");
+  const emailEl = document.getElementById("forgot-email");
+  if (emailEl) emailEl.value = "";
+  const btn = document.getElementById("forgot-password-btn");
+  if (btn) { btn.textContent = "Send Reset Link"; btn.disabled = false; btn.removeAttribute("hidden"); }
+}
+
+async function handleForgotPassword() {
+  const emailEl = document.getElementById("forgot-email");
+  const btn = document.getElementById("forgot-password-btn");
+  const errEl = document.getElementById("forgot-password-error");
+  const successEl = document.getElementById("forgot-password-success");
+
+  const email = emailEl?.value.trim() ?? "";
+  if (!email) {
+    if (errEl) { errEl.textContent = "Please enter your email address."; errEl.removeAttribute("hidden"); }
+    return;
+  }
+
+  if (btn) { btn.textContent = "Sending…"; btn.disabled = true; }
+  if (errEl) errEl.setAttribute("hidden", "");
+
+  try {
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (error) throw error;
+
+    if (successEl) {
+      successEl.textContent = "Check your email — a password reset link is on its way.";
+      successEl.removeAttribute("hidden");
+    }
+    if (btn) btn.setAttribute("hidden", "");
+  } catch (err) {
+    const msg = err?.message ?? "Failed to send reset email. Please try again.";
+    if (errEl) { errEl.textContent = msg; errEl.removeAttribute("hidden"); }
+    if (btn) { btn.textContent = "Send Reset Link"; btn.disabled = false; }
+  }
 }
 
 async function handleSetPassword() {
@@ -152,6 +200,7 @@ async function handleSetPassword() {
   const confirmPwEl = document.getElementById("confirm-password");
   const btn = document.getElementById("set-password-btn");
   const errEl = document.getElementById("set-password-error");
+  const successEl = document.getElementById("set-password-success");
 
   const password = newPwEl?.value ?? "";
   const confirm = confirmPwEl?.value ?? "";
@@ -171,17 +220,29 @@ async function handleSetPassword() {
   try {
     const { error } = await supabaseClient.auth.updateUser({ password });
     if (error) throw error;
-    // Grab the refreshed session after password update
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (session?.access_token) {
-      setCurrentUser(session.access_token);
+
+    // Show success message
+    if (successEl) {
+      successEl.textContent = "Password created successfully! Redirecting to sign in…";
+      successEl.removeAttribute("hidden");
     }
-    hideLogin();
-    bootstrap().catch((e) => setStatus(`Error: ${e.message}`));
+    if (btn) btn.setAttribute("hidden", "");
+
+    // Sign out and return to login screen after a short delay
+    setTimeout(async () => {
+      await supabaseClient.auth.signOut();
+      _cachedAccessToken = "";
+      currentUser = null;
+      if (newPwEl) newPwEl.value = "";
+      if (confirmPwEl) confirmPwEl.value = "";
+      if (successEl) successEl.setAttribute("hidden", "");
+      if (btn) { btn.textContent = "Set Password & Continue"; btn.disabled = false; btn.removeAttribute("hidden"); }
+      document.getElementById("set-password-view")?.setAttribute("hidden", "");
+      document.getElementById("sign-in-view")?.removeAttribute("hidden");
+    }, 2500);
   } catch (err) {
     const msg = err?.message ?? "Failed to set password. Please try again.";
     if (errEl) { errEl.textContent = msg; errEl.removeAttribute("hidden"); }
-  } finally {
     if (btn) { btn.textContent = "Set Password & Continue"; btn.disabled = false; }
   }
 }
@@ -219,6 +280,19 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("set-password-btn")?.addEventListener("click", handleSetPassword);
   document.getElementById("confirm-password")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleSetPassword();
+  });
+  document.getElementById("forgot-password-link")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    showForgotPassword();
+  });
+  document.getElementById("back-to-login-link")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    document.getElementById("forgot-password-view")?.setAttribute("hidden", "");
+    document.getElementById("sign-in-view")?.removeAttribute("hidden");
+  });
+  document.getElementById("forgot-password-btn")?.addEventListener("click", handleForgotPassword);
+  document.getElementById("forgot-email")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleForgotPassword();
   });
 });
 const ROW_FORM_SHEETS = new Set();
