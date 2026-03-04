@@ -583,6 +583,12 @@ class FormulaParser:
                         break
                 return ("func", ident.upper(), args)
 
+            # Handle unquoted multi-word sheet names e.g. "Rent Roll!G15"
+            while (self._peek()[0] == "IDENT"
+                   and self.pos + 1 < len(self.tokens)
+                   and self.tokens[self.pos + 1][0] == "BANG"):
+                ident = ident + " " + self._consume()[1]
+
             if self._accept("BANG"):
                 cell = self._parse_cell_ref(sheet=ident)
                 return self._parse_range_suffix(cell)
