@@ -1426,6 +1426,11 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
             return "*"
         if origin in allowed:
             return origin
+        # Allow same-origin requests even when a whitelist is active.
+        # Browsers send Origin on same-origin POSTs; the server must not block itself.
+        host = self.headers.get("Host", "")
+        if host and origin in (f"http://{host}", f"https://{host}"):
+            return origin
         return "__blocked__"
 
     def _write_cors_headers(self) -> None:
