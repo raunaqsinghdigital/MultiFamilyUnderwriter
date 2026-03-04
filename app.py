@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 from urllib.request import urlopen
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
@@ -30,6 +30,9 @@ STATIC_DIR = ROOT_DIR / "static"
 MODEL_PATH = DATA_DIR / "workbook_model.json"
 FORMULAS_PATH = DATA_DIR / "formulas_expanded.json"
 OVERRIDES_PATH = DATA_DIR / "admin_overrides.json"
+VALUE_ADD_MODEL_PATH     = DATA_DIR / "value_add_model.json"
+VALUE_ADD_FORMULAS_PATH  = DATA_DIR / "value_add_formulas_expanded.json"
+VALUE_ADD_OVERRIDES_PATH = DATA_DIR / "value_add_admin_overrides.json"
 MORTGAGE_SHEET_NAME = "Mortgage"
 ONE_POINT_ONE_SHEET_NAME = "1.1"
 HIDDEN_ANALYST_SHEETS = {MORTGAGE_SHEET_NAME, ONE_POINT_ONE_SHEET_NAME}
@@ -627,8 +630,9 @@ class FormulaParser:
 
 
 class PurePythonUnderwriterEngine:
-    def __init__(self, model: dict) -> None:
+    def __init__(self, model: dict, product: str = "buy-hold") -> None:
         self.model = model
+        self.product = product
         self._lock = threading.Lock()
 
         self.input_meta: dict[str, dict] = {
@@ -767,6 +771,10 @@ class PurePythonUnderwriterEngine:
         formula_overrides: dict[str, object],
         rent_roll: dict,
     ) -> None:
+        if self.product == "value-add":
+            self._apply_dynamic_rent_roll_va(state, normalized_inputs, formula_overrides, rent_roll)
+            return
+
         if rent_roll["combined_property"]:
             state["Valuation!D4"] = rent_roll["combined_property"]
             normalized_inputs["Valuation!D4"] = rent_roll["combined_property"]
@@ -816,6 +824,54 @@ class PurePythonUnderwriterEngine:
         formula_overrides["Rent Roll!E15"] = totals["utilities"]
         formula_overrides["Rent Roll!I15"] = totals["total_rent"]
         formula_overrides["Rent Roll!J15"] = totals["projected_rent"]
+
+    def _apply_dynamic_rent_roll_va(
+        self,
+        state: dict[str, object],
+        normalized_inputs: dict[str, object],
+        formula_overrides: dict[str, object],
+        rent_roll: dict,
+    ) -> None:
+        # Value Add: D5=property name, D6=unit count (different from BH D4/D5)
+        if rent_roll["combined_property"]:
+            state["Valuation!D5"] = rent_roll["combined_property"]
+            normalized_inputs["Valuation!D5"] = rent_roll["combined_property"]
+
+        state["Valuation!D6"] = rent_roll["unit_count"]
+        normalized_inputs["Valuation!D6"] = rent_roll["unit_count"]
+
+        # VA Rent Roll layout: A=tenant, B=unit, C=regular_rent, D=utilities, E=pet_fee,
+        # G=per-unit total (computed), H=projected_rent
+        base_row = 6
+        workbook_row_count = 8
+        for idx in range(workbook_row_count):
+            row_index = base_row + idx
+            if idx < len(rent_roll["units"]):
+                row = rent_roll["units"][idx]
+                per_unit_total = row["regular_rent"] + row["utilities"] + row["pet_fee"]
+                state[f"Rent Roll!A{row_index}"] = row["tenant_name"]
+                state[f"Rent Roll!B{row_index}"] = row["unit"]
+                state[f"Rent Roll!C{row_index}"] = row["regular_rent"]
+                state[f"Rent Roll!D{row_index}"] = row["utilities"]
+                state[f"Rent Roll!E{row_index}"] = row["pet_fee"]
+                state[f"Rent Roll!G{row_index}"] = per_unit_total
+                state[f"Rent Roll!H{row_index}"] = row["projected_rent"]
+            else:
+                state[f"Rent Roll!A{row_index}"] = ""
+                state[f"Rent Roll!B{row_index}"] = ""
+                state[f"Rent Roll!C{row_index}"] = 0
+                state[f"Rent Roll!D{row_index}"] = 0
+                state[f"Rent Roll!E{row_index}"] = 0
+                state[f"Rent Roll!G{row_index}"] = 0
+                state[f"Rent Roll!H{row_index}"] = 0
+
+        totals = rent_roll["totals"]
+        # G15 = total current monthly rent (feeds Valuation!G10 via formula)
+        # H15 = total projected monthly rent (feeds Refinance!G10 via formula)
+        state["Rent Roll!G15"] = totals["total_rent"]
+        state["Rent Roll!H15"] = totals["projected_rent"]
+        formula_overrides["Rent Roll!G15"] = totals["total_rent"]
+        formula_overrides["Rent Roll!H15"] = totals["projected_rent"]
 
     def _to_number(self, value: object) -> float:
         if isinstance(value, bool):
@@ -1172,9 +1228,10 @@ class PurePythonUnderwriterEngine:
 
 
 class AppState:
-    def __init__(self, base_model: dict, overrides_path: Path) -> None:
+    def __init__(self, base_model: dict, overrides_path: Path, product: str = "buy-hold") -> None:
         self.base_model = deep_clone(base_model)
         self.overrides_path = overrides_path
+        self.product = product
         self._lock = threading.RLock()
 
         self.mortgage_default_formulas = self._collect_mortgage_defaults(self.base_model)
@@ -1238,7 +1295,7 @@ class AppState:
 
         self.model_full = model_full
         self.model_public = filter_public_model(model_full)
-        self.engine = PurePythonUnderwriterEngine(model_full)
+        self.engine = PurePythonUnderwriterEngine(model_full, product=self.product)
         self.mortgage_admin_records = self._build_mortgage_records(model_full)
 
     def get_public_model(self) -> dict:
@@ -1298,7 +1355,20 @@ class AppState:
 
 
 class UnderwriterHandler(BaseHTTPRequestHandler):
-    state: AppState | None = None
+
+    def _resolve_state(self, query_string: str) -> "AppState | None":
+        """Return the AppState for the requested product, or None (after sending error)."""
+        product = parse_qs(query_string).get("product", ["buy-hold"])[0]
+        if product == "value-add":
+            state = getattr(self.server, "value_add_state", None)
+            if state is None:
+                self._send_json(
+                    {"error": "Value Add model not available. Run scripts/extract_value_add_model.py"},
+                    status=503,
+                )
+                return None
+            return state
+        return self.server.buy_hold_state
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -1310,19 +1380,19 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
             user, blocked = self._require_auth()
             if blocked:
                 return
-            if self.state is None:
-                self._send_json({"error": "Server not initialized"}, status=500)
+            state = self._resolve_state(parsed.query)
+            if state is None:
                 return
-            self._send_json(self.state.get_public_model())
+            self._send_json(state.get_public_model())
             return
         if parsed.path == "/api/admin/mortgage":
             user, blocked = self._require_auth(required_role="admin")
             if blocked:
                 return
-            if self.state is None:
-                self._send_json({"error": "Server not initialized"}, status=500)
+            state = self._resolve_state(parsed.query)
+            if state is None:
                 return
-            self._send_json(self.state.get_mortgage_admin_payload())
+            self._send_json(state.get_mortgage_admin_payload())
             return
         self._serve_static(parsed.path)
 
@@ -1340,8 +1410,8 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
         user, blocked = self._require_auth(required_role=required_role)
         if blocked:
             return
-        if self.state is None:
-            self._send_json({"error": "Server not initialized"}, status=500)
+        state = self._resolve_state(parsed.query)
+        if state is None:
             return
 
         content_length = int(self.headers.get("Content-Length", "0"))
@@ -1357,7 +1427,7 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
                 if not isinstance(payload, dict) or not isinstance(payload.get("inputs"), dict):
                     self._send_json({"error": "Body must include an inputs object"}, status=400)
                     return
-                result = self.state.calculate(
+                result = state.calculate(
                     inputs=payload["inputs"],
                     rent_roll_payload=payload.get("rent_roll"),
                 )
@@ -1365,7 +1435,7 @@ class UnderwriterHandler(BaseHTTPRequestHandler):
                 if not isinstance(payload, dict) or not isinstance(payload.get("overrides"), dict):
                     self._send_json({"error": "Body must include an overrides object"}, status=400)
                     return
-                result = self.state.update_mortgage_overrides(payload["overrides"])
+                result = state.update_mortgage_overrides(payload["overrides"])
         except ValueError as exc:
             self._send_json({"error": str(exc)}, status=400)
             return
@@ -1534,9 +1604,15 @@ def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
-    model = load_model(Path(args.model).expanduser(), Path(args.formulas).expanduser())
-    overrides_path = Path(args.overrides).expanduser()
-    UnderwriterHandler.state = AppState(base_model=model, overrides_path=overrides_path)
+    bh_model = load_model(Path(args.model).expanduser(), Path(args.formulas).expanduser())
+    bh_state = AppState(base_model=bh_model, overrides_path=Path(args.overrides).expanduser(), product="buy-hold")
+
+    if VALUE_ADD_MODEL_PATH.exists() and VALUE_ADD_FORMULAS_PATH.exists():
+        va_model = load_model(VALUE_ADD_MODEL_PATH, VALUE_ADD_FORMULAS_PATH)
+        va_state: AppState | None = AppState(base_model=va_model, overrides_path=VALUE_ADD_OVERRIDES_PATH, product="value-add")
+    else:
+        va_state = None
+        print("WARNING: Value Add model not found. Run scripts/extract_value_add_model.py to generate it.")
 
     allowed_origins: set[str] = (
         {o.strip() for o in args.allowed_origins.split(",") if o.strip()}
@@ -1549,8 +1625,12 @@ def main() -> None:
               "(ES256/JWKS projects issued after Aug 2024 do not need this.)")
 
     server = UnderwriterServer((args.host, args.port), UnderwriterHandler, allowed_origins)
+    server.buy_hold_state = bh_state
+    server.value_add_state = va_state
     print(f"Underwriter running at http://{args.host}:{args.port}")
     print("Calculation engine: pure Python (no Excel runtime dependency)")
+    products_loaded = ["Buy & Hold"] + (["Value Add"] if va_state else [])
+    print(f"Products loaded: {', '.join(products_loaded)}")
     if allowed_origins:
         print(f"CORS: restricted to {', '.join(sorted(allowed_origins))}")
     else:

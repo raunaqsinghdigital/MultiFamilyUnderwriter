@@ -1,7 +1,9 @@
-const modelUrl = "/api/model";
-const calculateUrl = "/api/calculate";
-const adminMortgageUrl = "/api/admin/mortgage";
-const adminMortgageOverrideUrl = "/api/admin/mortgage-overrides";
+let currentProduct = "buy-hold"; // "buy-hold" | "value-add"
+
+const getModelUrl     = () => `/api/model?product=${currentProduct}`;
+const getCalculateUrl = () => `/api/calculate?product=${currentProduct}`;
+const getAdminMortgageUrl         = () => `/api/admin/mortgage?product=${currentProduct}`;
+const getAdminMortgageOverrideUrl = () => `/api/admin/mortgage-overrides?product=${currentProduct}`;
 const PDF_REPORT_SHEET = "__pdf_report";
 
 // ── Supabase Auth ─────────────────────────────────────────────────────────────
@@ -1073,6 +1075,209 @@ const SENSITIVITY_RESULT_FIELDS = [
   { id: "investor_roi", label: "Investor ROI", format: "percent" },
 ];
 
+// ── Value Add metadata constants ───────────────────────────────────────────────
+// VA percentages are stored as decimals (0.06 = 6%) — no PERCENT_WHOLE conversion.
+const VA_PERCENT_WHOLE_INPUT_KEYS = new Set([]);
+const VA_VALUATION_RENTROLL_AUTOFILL_KEYS = new Map(); // VA has no rentroll autofill
+const VA_VALUATION_INPUT_HINTS = new Map([
+  ["Valuation!D5", "Enter property name or address."],
+  ["Valuation!D6", "Enter number of units."],
+  ["Valuation!D7", "Enter purchase price as dollar amount."],
+  ["Valuation!E11", "Enter annual laundry income in $/year."],
+  ["Valuation!D15", "Enter vacancy as decimal (example: 0.05 for 5%)."],
+  ["Valuation!E19", "Enter annual property taxes in $/year."],
+  ["Valuation!F20", "Enter insurance in $/unit/year."],
+  ["Valuation!F21", "Enter repairs and maintenance in $/unit/year."],
+  ["Valuation!F22", "Enter appliance reserve in $/unit/year."],
+  ["Valuation!F23", "Enter wages/on-site manager in $/unit/year."],
+  ["Valuation!F24", "Enter utilities in $/unit/year."],
+  ["Valuation!D25", "Enter management fee as decimal (example: 0.04 for 4%)."],
+  ["Valuation!D26", "Enter other/advertising fee as decimal (example: 0.02 for 2%)."],
+  ["Valuation!E30", "Enter market cap rate as decimal (example: 0.0575 for 5.75%)."],
+  ["Valuation!E33", "Enter lender interest rate as decimal (example: 0.06 for 6%)."],
+  ["Valuation!E34", "Enter amortization period in years."],
+  ["Valuation!E35", "Enter max lender LTV as decimal (example: 0.75 for 75%)."],
+  ["Valuation!E36", "Enter required DSCR ratio (example: 1.25)."],
+  ["Refinance!D5", "Enter property name or address."],
+  ["Refinance!D6", "Enter number of units (post-renovation)."],
+  ["Refinance!D7", "Enter post-renovation purchase/appraised value."],
+  ["Refinance!E12", "Enter annual other/commercial income in $/year."],
+  ["Refinance!D15", "Enter vacancy as decimal (example: 0.05 for 5%)."],
+  ["Refinance!E19", "Enter annual property taxes in $/year."],
+  ["Refinance!F20", "Enter insurance in $/unit/year."],
+  ["Refinance!F21", "Enter repairs and maintenance in $/unit/year."],
+  ["Refinance!F22", "Enter appliance reserve in $/unit/year."],
+  ["Refinance!F23", "Enter wages/on-site manager in $/unit/year."],
+  ["Refinance!F24", "Enter utilities in $/unit/year."],
+  ["Refinance!D25", "Enter management fee as decimal (example: 0.04 for 4%)."],
+  ["Refinance!D26", "Enter other/advertising fee as decimal (example: 0.02 for 2%)."],
+  ["Refinance!E30", "Enter market cap rate as decimal (example: 0.0575 for 5.75%)."],
+  ["Refinance!E33", "Enter CMHC interest rate as decimal (example: 0.045 for 4.5%)."],
+  ["Refinance!E34", "Enter amortization period in years (CMHC MLI Select: up to 50)."],
+  ["Refinance!E35", "Enter max CMHC LTV as decimal (example: 0.95 for 95%)."],
+  ["Refinance!E36", "Enter required DSCR ratio (CMHC MLI Select: 1.1)."],
+]);
+const VA_VALUATION_RESULT_FIELDS = [
+  { key: "Valuation!E16", label: "Effective Gross Income (EGI)", format: "money" },
+  { key: "Valuation!E27", label: "Operating Expenses", format: "money", secondaryKey: "Valuation!H27", secondaryLabel: "OER", secondaryFormat: "percent" },
+  { key: "Valuation!E29", label: "Net Operating Income (NOI)", format: "money" },
+  { key: "Valuation!E31", label: "Value Based on Cap Rate", format: "money", secondaryKey: "Valuation!E30", secondaryLabel: "Cap Rate", secondaryFormat: "percent" },
+  { key: "Valuation!E45", label: "Max Loan (Lesser of 3)", format: "money" },
+  { key: "Valuation!E46", label: "Actual LTC", format: "percent" },
+  { key: "Valuation!E48", label: "Actual DSCR", format: "number" },
+  { key: "Valuation!E49", label: "Property Cap Rate (NOI/Price)", format: "percent" },
+];
+const VA_REFINANCE_RESULT_FIELDS = [
+  { key: "Refinance!E16", label: "Effective Gross Income (EGI)", format: "money" },
+  { key: "Refinance!E27", label: "Operating Expenses", format: "money", secondaryKey: "Refinance!H27", secondaryLabel: "OER", secondaryFormat: "percent" },
+  { key: "Refinance!E29", label: "Net Operating Income (NOI)", format: "money" },
+  { key: "Refinance!E31", label: "Value Based on Cap Rate", format: "money", secondaryKey: "Refinance!E30", secondaryLabel: "Cap Rate", secondaryFormat: "percent" },
+  { key: "Refinance!E45", label: "Max CMHC Loan (Lesser of 3)", format: "money" },
+  { key: "Refinance!E46", label: "Actual LTC", format: "percent" },
+  { key: "Refinance!E48", label: "Actual DSCR", format: "number" },
+];
+const VA_VALUATION_TABLE_COLUMNS = [
+  { id: "year", label: "$/year", format: "money" },
+  { id: "unit_year", label: "$/unit/yr", format: "money" },
+  { id: "month", label: "$/month", format: "money" },
+  { id: "pct_egi", label: "% EGI", format: "percent" },
+];
+const VA_VALUATION_SECONDARY_ROWS = [
+  { label: "Value Based on Cap Rate", key: "Valuation!E31", format: "money", supplementalKey: "Valuation!F31", supplementalFormat: "money", supplementalSuffix: "/door" },
+  { label: "Max Loan Based on LTV (cap rate value)", key: "Valuation!E41", format: "money" },
+  { label: "Max Loan Based on Purchase Price (LTC)", key: "Valuation!E42", format: "money" },
+  { label: "Max Loan Based on DSCR", key: "Valuation!E43", format: "money" },
+  { label: "Down Payment", key: "Valuation!E51", format: "money" },
+];
+const VA_REFINANCE_SECONDARY_ROWS = [
+  { label: "Value Based on Cap Rate", key: "Refinance!E31", format: "money", supplementalKey: "Refinance!F31", supplementalFormat: "money", supplementalSuffix: "/door" },
+  { label: "Max Loan Based on LTV (cap rate value)", key: "Refinance!E41", format: "money" },
+  { label: "Max Loan Based on Purchase Price", key: "Refinance!E42", format: "money" },
+  { label: "Max Loan Based on DSCR", key: "Refinance!E43", format: "money" },
+  { label: "Down Payment", key: "Refinance!E51", format: "money" },
+];
+const VA_VALUATION_ASSUMPTION_NOTES = new Map([
+  ["Valuation!E30", "Average cap rate of comparables in the area."],
+  ["Refinance!E30", "Average cap rate of comparables in the area."],
+]);
+const VA_VALUATION_SECTIONS = [
+  {
+    title: "Rental Revenue (Current)",
+    rows: [
+      { label: "Monthly Rent (from Rent Roll)", cells: { month: "Valuation!G10", year: "Valuation!E10", unit_year: "Valuation!F10" } },
+      { label: "Laundry / Other Income", cells: { year: "Valuation!E11", unit_year: "Valuation!F11", month: "Valuation!G11" } },
+      { label: "Potential Gross Income (PGI)", emphasis: true, cells: { year: "Valuation!E14", unit_year: "Valuation!F14", month: "Valuation!G14" } },
+      { label: "Vacancy", description: "Typical CMHC vacancy for area.", cells: { year: "Valuation!E15", unit_year: "Valuation!F15", month: "Valuation!G15" } },
+      { label: "Effective Gross Income (EGI)", emphasis: true, cells: { year: "Valuation!E16", unit_year: "Valuation!F16", month: "Valuation!G16" } },
+    ],
+  },
+  {
+    title: "Operating Expenses",
+    rows: [
+      { label: "Property Taxes", description: "0.7–1% of sale price.", cells: { year: "Valuation!E19", unit_year: "Valuation!F19", month: "Valuation!G19", pct_egi: "Valuation!H19" } },
+      { label: "Insurance", description: "~600–800/unit/year.", cells: { year: "Valuation!E20", unit_year: "Valuation!F20", month: "Valuation!G20", pct_egi: "Valuation!H20" } },
+      { label: "Repairs & Maintenance", cells: { year: "Valuation!E21", unit_year: "Valuation!F21", month: "Valuation!G21", pct_egi: "Valuation!H21" } },
+      { label: "Appliances", description: "~60/appliance/unit/year.", cells: { year: "Valuation!E22", unit_year: "Valuation!F22", month: "Valuation!G22", pct_egi: "Valuation!H22" } },
+      { label: "Wages / On-site Manager", cells: { year: "Valuation!E23", unit_year: "Valuation!F23", month: "Valuation!G23", pct_egi: "Valuation!H23" } },
+      { label: "Utilities", description: "All utilities ~3000 PUPA.", cells: { year: "Valuation!E24", unit_year: "Valuation!F24", month: "Valuation!G24", pct_egi: "Valuation!H24" } },
+      { label: "Management", description: "4.5–6% for <24 units.", cells: { year: "Valuation!E25", unit_year: "Valuation!F25", month: "Valuation!G25", pct_egi: "Valuation!H25" } },
+      { label: "Other / Advertising", description: "~1–2% of EGI.", cells: { year: "Valuation!E26", unit_year: "Valuation!F26", month: "Valuation!G26", pct_egi: "Valuation!H26" } },
+      { label: "Total Operating Expenses", emphasis: true, description: "Newer ~35–45%; older ~45–55% of EGI.", cells: { year: "Valuation!E27", unit_year: "Valuation!F27", month: "Valuation!G27", pct_egi: "Valuation!H27" } },
+      { label: "Net Operating Income (NOI)", emphasis: true, cells: { year: "Valuation!E29", unit_year: "Valuation!F29", month: "Valuation!G29" } },
+    ],
+  },
+  {
+    title: "Financing & Value",
+    rows: [
+      { label: "Value Based on Cap Rate", cells: { year: "Valuation!E31", unit_year: "Valuation!F31" } },
+      { label: "Annual Debt Service (CMHC formula)", cells: { year: "Valuation!E38" } },
+      { label: "Max Annual DS / NOI test", cells: { year: "Valuation!E37" } },
+      { label: "NOI / DS (actual DSCR test)", cells: { year: "Valuation!E39" } },
+      { label: "Max Loan Based on LTV (cap value)", cells: { year: "Valuation!E41" } },
+      { label: "Max Loan Based on Purchase Price", cells: { year: "Valuation!E42" } },
+      { label: "Max Loan Based on DSCR", cells: { year: "Valuation!E43" } },
+      { label: "Lesser of the Three Loans", emphasis: true, cells: { year: "Valuation!E45" } },
+      { label: "Actual LTC", cells: { year: "Valuation!E46" }, formats: { year: "percent" } },
+      { label: "Actual Debt Service (P&I)", cells: { year: "Valuation!E47" } },
+      { label: "Actual DSCR", cells: { year: "Valuation!E48" }, formats: { year: "number" } },
+      { label: "Property Cap Rate (NOI/Price)", cells: { year: "Valuation!E49" }, formats: { year: "percent" } },
+      { label: "Down Payment", emphasis: true, cells: { year: "Valuation!E51" } },
+    ],
+  },
+];
+const VA_REFINANCE_SECTIONS = [
+  {
+    title: "Rental Revenue (Projected Post-Renovation)",
+    rows: [
+      { label: "Projected Monthly Rent (from Rent Roll)", cells: { month: "Refinance!G10", year: "Refinance!E10", unit_year: "Refinance!F10" } },
+      { label: "Laundry / Other Income", cells: { year: "Refinance!E11", unit_year: "Refinance!F11", month: "Refinance!G11" } },
+      { label: "Commercial / Other Income", cells: { year: "Refinance!E12", unit_year: "Refinance!F12", month: "Refinance!G12" } },
+      { label: "Potential Gross Income (PGI)", emphasis: true, cells: { year: "Refinance!E14", unit_year: "Refinance!F14", month: "Refinance!G14" } },
+      { label: "Vacancy", description: "Typical CMHC vacancy for area.", cells: { year: "Refinance!E15", unit_year: "Refinance!F15", month: "Refinance!G15" } },
+      { label: "Effective Gross Income (EGI)", emphasis: true, cells: { year: "Refinance!E16", unit_year: "Refinance!F16", month: "Refinance!G16" } },
+    ],
+  },
+  {
+    title: "Operating Expenses",
+    rows: [
+      { label: "Property Taxes", cells: { year: "Refinance!E19", unit_year: "Refinance!F19", month: "Refinance!G19", pct_egi: "Refinance!H19" } },
+      { label: "Insurance", cells: { year: "Refinance!E20", unit_year: "Refinance!F20", month: "Refinance!G20", pct_egi: "Refinance!H20" } },
+      { label: "Repairs & Maintenance", cells: { year: "Refinance!E21", unit_year: "Refinance!F21", month: "Refinance!G21", pct_egi: "Refinance!H21" } },
+      { label: "Appliances", cells: { year: "Refinance!E22", unit_year: "Refinance!F22", month: "Refinance!G22", pct_egi: "Refinance!H22" } },
+      { label: "Wages / On-site Manager", cells: { year: "Refinance!E23", unit_year: "Refinance!F23", month: "Refinance!G23", pct_egi: "Refinance!H23" } },
+      { label: "Utilities", cells: { year: "Refinance!E24", unit_year: "Refinance!F24", month: "Refinance!G24", pct_egi: "Refinance!H24" } },
+      { label: "Management", cells: { year: "Refinance!E25", unit_year: "Refinance!F25", month: "Refinance!G25", pct_egi: "Refinance!H25" } },
+      { label: "Other / Advertising", cells: { year: "Refinance!E26", unit_year: "Refinance!F26", month: "Refinance!G26", pct_egi: "Refinance!H26" } },
+      { label: "Total Operating Expenses", emphasis: true, cells: { year: "Refinance!E27", unit_year: "Refinance!F27", month: "Refinance!G27", pct_egi: "Refinance!H27" } },
+      { label: "Net Operating Income (NOI)", emphasis: true, cells: { year: "Refinance!E29", unit_year: "Refinance!F29", month: "Refinance!G29" } },
+    ],
+  },
+  {
+    title: "CMHC Financing & Value (Post-Renovation)",
+    rows: [
+      { label: "Value Based on Cap Rate", cells: { year: "Refinance!E31", unit_year: "Refinance!F31" } },
+      { label: "Annual Debt Service (CMHC formula)", cells: { year: "Refinance!E38" } },
+      { label: "CMHC Loan Based on LTV (cap value)", cells: { year: "Refinance!E41" } },
+      { label: "CMHC Loan Based on Purchase Price", cells: { year: "Refinance!E42" } },
+      { label: "CMHC Loan Based on DSCR", cells: { year: "Refinance!E43" } },
+      { label: "Lesser of the Three Loans", emphasis: true, cells: { year: "Refinance!E45" } },
+      { label: "Actual LTC", cells: { year: "Refinance!E46" }, formats: { year: "percent" } },
+      { label: "Actual Debt Service (P&I)", cells: { year: "Refinance!E47" } },
+      { label: "Actual DSCR", cells: { year: "Refinance!E48" }, formats: { year: "number" } },
+      { label: "Down Payment", emphasis: true, cells: { year: "Refinance!E51" } },
+    ],
+  },
+];
+
+// ── Metadata getter functions (product-aware) ──────────────────────────────────
+function getPercentWholeInputKeys() {
+  return currentProduct === "value-add" ? VA_PERCENT_WHOLE_INPUT_KEYS : PERCENT_WHOLE_INPUT_KEYS;
+}
+function getValuationRentRollAutofillKeys() {
+  return currentProduct === "value-add" ? VA_VALUATION_RENTROLL_AUTOFILL_KEYS : VALUATION_RENTROLL_AUTOFILL_KEYS;
+}
+function getValuationInputHints() {
+  return currentProduct === "value-add" ? VA_VALUATION_INPUT_HINTS : VALUATION_INPUT_HINTS;
+}
+function getValuationResultFields(sheetName) {
+  if (currentProduct !== "value-add") return VALUATION_RESULT_FIELDS;
+  return sheetName === "Refinance" ? VA_REFINANCE_RESULT_FIELDS : VA_VALUATION_RESULT_FIELDS;
+}
+function getValuationSections(sheetName) {
+  if (currentProduct !== "value-add") return VALUATION_SECTIONS;
+  return sheetName === "Refinance" ? VA_REFINANCE_SECTIONS : VA_VALUATION_SECTIONS;
+}
+function getValuationTableColumns() {
+  return currentProduct === "value-add" ? VA_VALUATION_TABLE_COLUMNS : VALUATION_TABLE_COLUMNS;
+}
+function getValuationSecondaryRows(sheetName) {
+  if (currentProduct !== "value-add") return VALUATION_SECONDARY_ROWS;
+  return sheetName === "Refinance" ? VA_REFINANCE_SECONDARY_ROWS : VA_VALUATION_SECONDARY_ROWS;
+}
+function getValuationAssumptionNotes() {
+  return currentProduct === "value-add" ? VA_VALUATION_ASSUMPTION_NOTES : VALUATION_ASSUMPTION_NOTES;
+}
+
 let workbookModel = null;
 const inputElements = new Map();
 const formulaElements = new Map();
@@ -1108,6 +1313,35 @@ let sensitivityState = {
 };
 let sensitivityView = null;
 
+// ── Per-product state save / restore ──────────────────────────────────────────
+// When switching tabs, the active state vars above are saved here keyed by product,
+// then restored when the user switches back.  "buy-hold" entry is never pre-seeded
+// so first load always fetches fresh from the server.
+const _productStateCache = {};
+
+function _saveProductState() {
+  _productStateCache[currentProduct] = {
+    workbookModel,
+    rentRollState: rentRollState ? JSON.parse(JSON.stringify(rentRollState)) : null,
+    rentRollDefaultState: rentRollDefaultState ? JSON.parse(JSON.stringify(rentRollDefaultState)) : null,
+    sensitivityState: JSON.parse(JSON.stringify(sensitivityState)),
+    latestFormulaValues: Object.assign({}, latestFormulaValues),
+    hasSuccessfulCalculation,
+  };
+}
+
+function _restoreProductState(product) {
+  const saved = _productStateCache[product];
+  if (!saved) return false;
+  workbookModel = saved.workbookModel;
+  rentRollState = saved.rentRollState;
+  rentRollDefaultState = saved.rentRollDefaultState;
+  sensitivityState = saved.sensitivityState;
+  latestFormulaValues = saved.latestFormulaValues;
+  hasSuccessfulCalculation = saved.hasSuccessfulCalculation;
+  return true;
+}
+
 function isPresentValue(value) {
   return String(value ?? "").trim() !== "";
 }
@@ -1130,7 +1364,7 @@ function wireInputElement(input, key, required = false) {
   }
   input.addEventListener("input", () => {
     updateInputDisplayElements(key, input.value);
-    if (VALUATION_RENTROLL_AUTOFILL_KEYS.has(key)) {
+    if (getValuationRentRollAutofillKeys().has(key)) {
       syncValuationRentRollAutofillManualOverrideFlag(key, input);
     }
     if (
@@ -1154,7 +1388,7 @@ function registerInputDisplayElement(key, element, format = "text") {
 function formatInputValueForDisplay(key, rawValue, displayType = "text") {
   if (!isPresentValue(rawValue)) return "";
   let valueForDisplay = rawValue;
-  if (displayType === "percent" && PERCENT_WHOLE_INPUT_KEYS.has(key)) {
+  if (displayType === "percent" && getPercentWholeInputKeys().has(key)) {
     valueForDisplay = normalizeWorkbookInputNumber(key, rawValue, Number.NaN);
   } else if (
     displayType === "money" ||
@@ -1296,14 +1530,14 @@ function toNumber(value, fallback = 0) {
 function normalizeWorkbookInputNumber(key, value, fallback = Number.NaN) {
   const numeric = toNumber(value, Number.NaN);
   if (!Number.isFinite(numeric)) return fallback;
-  if (PERCENT_WHOLE_INPUT_KEYS.has(key)) return numeric / 100;
+  if (getPercentWholeInputKeys().has(key)) return numeric / 100;
   return numeric;
 }
 
 function normalizeInputForSubmit(key, rawValue) {
   const text = String(rawValue ?? "").trim();
   if (!text) return "";
-  if (PERCENT_WHOLE_INPUT_KEYS.has(key)) {
+  if (getPercentWholeInputKeys().has(key)) {
     const numeric = toNumber(text, Number.NaN);
     if (Number.isFinite(numeric)) return numeric / 100;
   }
@@ -1552,7 +1786,7 @@ function updateValuationParkingOtherDerivedDisplays() {
 }
 
 function getValuationRentRollAutofillAnnualValue(key) {
-  const cfg = VALUATION_RENTROLL_AUTOFILL_KEYS.get(key);
+  const cfg = getValuationRentRollAutofillKeys().get(key);
   if (!cfg) return null;
   if (!hasRentRollFieldProvided(cfg.rentRollField)) return null;
   const annualValue =
@@ -1580,7 +1814,7 @@ function syncValuationRentRollAutofillManualOverrideFlag(key, input) {
 }
 
 function syncValuationRentRollAutofillInputs() {
-  for (const [key, cfg] of VALUATION_RENTROLL_AUTOFILL_KEYS.entries()) {
+  for (const [key, cfg] of getValuationRentRollAutofillKeys().entries()) {
     const input = inputElements.get(key);
     if (!input) continue;
 
@@ -2073,7 +2307,7 @@ function createFieldRow(field) {
     input.className = "field-input";
     input.type = field.value_type === "number" ? "number" : "text";
     input.step = "any";
-    if (PERCENT_WHOLE_INPUT_KEYS.has(field.key)) {
+    if (getPercentWholeInputKeys().has(field.key)) {
       input.value = formatPercentInput(getInputDefaultValue(field.key, 0));
       input.placeholder = "Enter percent";
       input.dataset.percentInput = "1";
@@ -2144,7 +2378,7 @@ function renderValuationKeycards(sheetView, panel) {
 
   const list = document.createElement("div");
   list.className = "valuation-keycards-grid";
-  for (const [idx, item] of VALUATION_RESULT_FIELDS.entries()) {
+  for (const [idx, item] of getValuationResultFields(sheetView.name).entries()) {
     const card = document.createElement("article");
     card.className = "valuation-keycard";
     card.dataset.tone = String((idx % 4) + 1);
@@ -2246,14 +2480,14 @@ function renderValuationCellContent(
     input.className = "field-input valuation-input";
     input.type = inputField.value_type === "number" ? "number" : "text";
     input.step = "any";
-    if (PERCENT_WHOLE_INPUT_KEYS.has(inputField.key)) {
+    if (getPercentWholeInputKeys().has(inputField.key)) {
       input.value = formatPercentInput(getInputDefaultValue(inputField.key, 0));
       input.placeholder = "Enter percent";
       input.dataset.percentInput = "1";
     } else {
       input.value = formatValue(getInputDefaultValue(inputField.key, ""));
     }
-    const hintText = VALUATION_INPUT_HINTS.get(inputField.key);
+    const hintText = getValuationInputHints().get(inputField.key);
     if (hintText) input.title = hintText;
     wrap.appendChild(input);
     wireInputElement(input, inputField.key, isRequired);
@@ -2325,7 +2559,7 @@ function renderValuationSectionTable(
   const firstTh = document.createElement("th");
   firstTh.textContent = "";
   hr.appendChild(firstTh);
-  for (const col of VALUATION_TABLE_COLUMNS) {
+  for (const col of getValuationTableColumns()) {
     const th = document.createElement("th");
     th.textContent = col.label;
     hr.appendChild(th);
@@ -2347,10 +2581,10 @@ function renderValuationSectionTable(
     labelTd.appendChild(labelMain);
 
     const rowInputHints = [];
-    for (const col of VALUATION_TABLE_COLUMNS) {
+    for (const col of getValuationTableColumns()) {
       const key = rowCfg.cells?.[col.id] || null;
       if (!key || !inputMap.has(key)) continue;
-      const hint = VALUATION_INPUT_HINTS.get(key);
+      const hint = getValuationInputHints().get(key);
       if (hint && !rowInputHints.includes(hint)) rowInputHints.push(hint);
     }
 
@@ -2417,7 +2651,7 @@ function renderValuationSectionTable(
     }
     tr.appendChild(labelTd);
 
-    for (const col of VALUATION_TABLE_COLUMNS) {
+    for (const col of getValuationTableColumns()) {
       const td = document.createElement("td");
       const key = rowCfg.cells[col.id] || null;
       const displayFormat = rowCfg.formats?.[col.id] || col.format;
@@ -2447,7 +2681,7 @@ function renderValuationSectionTable(
   return block;
 }
 
-function renderValuationSecondaryResults(outputMap, usedOutputKeys) {
+function renderValuationSecondaryResults(outputMap, usedOutputKeys, sheetName = "Valuation") {
   const section = document.createElement("section");
   section.className = "valuation-section valuation-secondary";
   section.dataset.section = "secondary-results";
@@ -2464,7 +2698,7 @@ function renderValuationSecondaryResults(outputMap, usedOutputKeys) {
   table.className = "valuation-secondary-table";
 
   const tbody = document.createElement("tbody");
-  for (const rowCfg of VALUATION_SECONDARY_ROWS) {
+  for (const rowCfg of getValuationSecondaryRows(sheetName)) {
     const tr = document.createElement("tr");
 
     const labelTd = document.createElement("td");
@@ -2591,8 +2825,8 @@ function renderValuationAssumptions(inputFields, usedInputKeys) {
     label.textContent = `${field.label} (${field.address})`;
     row.appendChild(label);
 
-    const noteText = VALUATION_ASSUMPTION_NOTES.get(field.key);
-    const inputHint = VALUATION_INPUT_HINTS.get(field.key);
+    const noteText = getValuationAssumptionNotes().get(field.key);
+    const inputHint = getValuationInputHints().get(field.key);
     if (noteText || inputHint) {
       if (noteText) row.classList.add("is-highlight");
       const note = document.createElement("div");
@@ -2615,7 +2849,7 @@ function renderValuationAssumptions(inputFields, usedInputKeys) {
       row.classList.add("required-field");
       label.classList.add("required-label");
     }
-    if (PERCENT_WHOLE_INPUT_KEYS.has(field.key)) {
+    if (getPercentWholeInputKeys().has(field.key)) {
       input.value = formatPercentInput(getInputDefaultValue(field.key, 0));
       input.placeholder = "Enter percent";
       input.dataset.percentInput = "1";
@@ -2663,13 +2897,14 @@ function renderValuationPanel(sheetView, index) {
   const inputMap = new Map(sheetView.inputs.map((f) => [f.key, f]));
   const outputMap = new Map(sheetView.outputs.map((f) => [f.key, f]));
   const usedInputKeys = new Set();
+  const _sheetName = sheetView.name;
   const usedOutputKeys = new Set(
-    VALUATION_RESULT_FIELDS.flatMap((item) =>
+    getValuationResultFields(_sheetName).flatMap((item) =>
       item.secondaryKey ? [item.key, item.secondaryKey] : [item.key],
     ),
   );
 
-  for (const section of VALUATION_SECTIONS) {
+  for (const section of getValuationSections(_sheetName)) {
     for (const row of section.rows) {
       for (const key of Object.values(row.cells || {})) {
         if (key && inputMap.has(key)) usedInputKeys.add(key);
@@ -2682,7 +2917,7 @@ function renderValuationPanel(sheetView, index) {
 
   const main = document.createElement("div");
   main.className = "valuation-main";
-  for (const section of VALUATION_SECTIONS) {
+  for (const section of getValuationSections(_sheetName)) {
     main.appendChild(
       renderValuationSectionTable(
         section,
@@ -2693,7 +2928,7 @@ function renderValuationPanel(sheetView, index) {
       ),
     );
   }
-  main.appendChild(renderValuationSecondaryResults(outputMap, usedOutputKeys));
+  main.appendChild(renderValuationSecondaryResults(outputMap, usedOutputKeys, _sheetName));
 
   const remainingOutputs = sheetView.outputs
     .filter((field) => !usedOutputKeys.has(field.key))
@@ -3830,7 +4065,7 @@ function renderReturnsCellContent(
     input.className = "field-input returns-input";
     input.type = inputField.value_type === "number" ? "number" : "text";
     input.step = "any";
-    if (PERCENT_WHOLE_INPUT_KEYS.has(inputField.key)) {
+    if (getPercentWholeInputKeys().has(inputField.key)) {
       input.value = formatPercentInput(getInputDefaultValue(inputField.key, 0));
       input.placeholder = "Enter percent";
       input.dataset.percentInput = "1";
@@ -4214,7 +4449,7 @@ function createRowFormField(field) {
     input.className = "field-input";
     input.type = field.value_type === "number" ? "number" : "text";
     input.step = "any";
-    if (PERCENT_WHOLE_INPUT_KEYS.has(field.key)) {
+    if (getPercentWholeInputKeys().has(field.key)) {
       input.value = formatPercentInput(getInputDefaultValue(field.key, 0));
       input.placeholder = "Enter percent";
       input.dataset.percentInput = "1";
@@ -4715,7 +4950,7 @@ function renderAdminMortgagePanel(payload) {
         if (formula && formula !== defaultFormula) overrides[key] = formula;
       }
 
-      const response = await fetch(adminMortgageOverrideUrl, {
+      const response = await fetch(getAdminMortgageOverrideUrl(), {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ overrides }),
@@ -4746,7 +4981,7 @@ async function loadAdminMortgageData(preserveTab = false) {
     ? document.querySelector(".tab-btn.active")?.dataset.sheet || ""
     : "";
 
-  const response = await fetch(adminMortgageUrl, { headers: authHeaders() });
+  const response = await fetch(getAdminMortgageUrl(), { headers: authHeaders() });
   if (response.status === 401) {
     showLogin("Session expired. Please sign in again.");
     return;
@@ -4817,13 +5052,15 @@ function renderWorkbook(model) {
         ? renderRentRollPanel(renderIndex)
         : sheetView.name === "Valuation"
           ? renderValuationPanel(sheetView, renderIndex)
-          : sheetView.name === "Returns"
-            ? renderReturnsPanel(sheetView, renderIndex)
-            : sheetView.name === "Sensitivity Analysis"
-              ? renderSensitivityPanel(sheetView, renderIndex)
-              : ROW_FORM_SHEETS.has(sheetView.name)
-                ? renderRowFormSheetPanel(sheetView, renderIndex)
-                : renderGenericSheetPanel(sheetView, renderIndex);
+          : sheetView.name === "Refinance"
+            ? renderValuationPanel(sheetView, renderIndex)
+            : sheetView.name === "Returns" || sheetView.name === "Return"
+              ? renderReturnsPanel(sheetView, renderIndex)
+              : sheetView.name === "Sensitivity Analysis"
+                ? renderSensitivityPanel(sheetView, renderIndex)
+                : ROW_FORM_SHEETS.has(sheetView.name)
+                  ? renderRowFormSheetPanel(sheetView, renderIndex)
+                  : renderGenericSheetPanel(sheetView, renderIndex);
     panelsEl.appendChild(panel);
     renderIndex += 1;
   }
@@ -4985,7 +5222,7 @@ async function calculate() {
     rentRollState = normalizeRentRollState(
       rentRollState || rentRollDefaultState || buildInitialRentRollState(),
     );
-    const response = await fetch(calculateUrl, {
+    const response = await fetch(getCalculateUrl(), {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({
@@ -5017,7 +5254,7 @@ async function calculate() {
 
 async function bootstrap() {
   setStatus("Loading underwriting model...");
-  const response = await fetch(modelUrl, { headers: authHeaders() });
+  const response = await fetch(getModelUrl(), { headers: authHeaders() });
   if (response.status === 401) {
     showLogin("Session expired. Please sign in again.");
     return;
@@ -5048,6 +5285,53 @@ resetBtn.addEventListener("click", () => {
   resetInputs().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     setStatus(`Error: ${message}`);
+  });
+});
+
+// ── Product tab switching ──────────────────────────────────────────────────────
+document.querySelectorAll(".product-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const newProduct = btn.dataset.product;
+    if (!newProduct || newProduct === currentProduct) return;
+
+    // Save current product's state
+    _saveProductState();
+
+    // Switch product
+    currentProduct = newProduct;
+
+    // Update tab UI
+    document.querySelectorAll(".product-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.product === currentProduct);
+      b.setAttribute("aria-pressed", String(b.dataset.product === currentProduct));
+    });
+
+    // Update toolbar title
+    const eyebrow = document.querySelector(".title-block .eyebrow");
+    if (eyebrow) {
+      eyebrow.textContent =
+        currentProduct === "value-add"
+          ? "Value Add Analysis Workspace"
+          : "Buy & Hold Analysis Workspace";
+    }
+
+    // Clear DOM panels (state is preserved in _productStateCache)
+    tabsEl.innerHTML = "";
+    panelsEl.innerHTML = "";
+    inputElements.clear();
+    formulaElements.clear();
+    derivedMetricElements.clear();
+    inputDisplayElements.clear();
+    pdfReportSummaryEl = null;
+    sensitivityView = null;
+
+    // Restore saved state or bootstrap fresh
+    const restored = _restoreProductState(currentProduct);
+    if (restored && workbookModel) {
+      renderWorkbook(workbookModel);
+    } else {
+      bootstrap().catch((e) => setStatus(`Error: ${e.message}`));
+    }
   });
 });
 
