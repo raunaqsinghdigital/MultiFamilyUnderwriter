@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `scripts/supabase-keepalive.sh` — daily ping of Supabase project `jpyoondbepffknsrbkoe` (PostgREST + GoTrue) so the Free plan stops scheduling the project for auto-pause after 7 quiet days. Runs unattended via launchd (`com.maplesyrupmoney.supabase-keepalive`, 09:20 local); the anon key comes from `$SUPABASE_ANON_KEY` there because macOS TCC blocks a LaunchAgent from reading `~/Documents`, and falls back to `static/app.js` for hand-runs. Two requests/day — nothing measurable against the Free allowance, and zero agent tokens.
+- `.github/workflows/supabase-keepalive.yml` — cloud twin of the same script at 00:20 UTC, covering the one case launchd cannot: the Mac being off for a week. No secrets; the anon key is a public client credential. Note GitHub disables `schedule` triggers after 60 days of repo inactivity.
+
 ---
 
 ## [1.2.0] — 2026-03-04

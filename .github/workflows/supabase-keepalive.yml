@@ -1,0 +1,45 @@
+# Cloud twin of the launchd job that keeps Supabase project jpyoondbepffknsrbkoe
+# from being auto-paused (Free plan pauses after 7 consecutive quiet days).
+#
+# The launchd job on the founder's Mac is the primary and handles the normal case.
+# This covers the one case it cannot: the Mac being off or off-network for a week
+# straight. Runs ~12h out of phase with launchd (which fires 09:20 local / 12:20 UTC).
+#
+# No secrets. The script falls back to the anon key in static/app.js, which is a
+# public client credential already shipped to every browser. Costs 2 HTTPS requests
+# and ~15s of runner time per day, and zero agent tokens — no model is in the loop.
+#
+# CAVEAT worth knowing: GitHub disables `schedule` triggers in a repository with no
+# commit activity for 60 days, and emails the repo owner when it does. This repo is
+# dormant between feature pushes, so expect that mail eventually — re-enable from the
+# Actions tab in one click, or push any commit. The launchd job is unaffected.
+name: Supabase keepalive
+
+on:
+  schedule:
+    - cron: "20 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # Non-zero exit fails the job, which is what makes GitHub email the owner.
+      # Do not add `|| true` here — a keepalive that cannot report failure is
+      # indistinguishable from one that is not running at all.
+      - name: Ping Supabase (PostgREST + GoTrue)
+        run: bash scripts/supabase-keepalive.sh
+
+      - name: Show result
+        if: always()
+        run: tail -n 5 "$HOME/Library/Logs/supabase-keepalive.log" || true
