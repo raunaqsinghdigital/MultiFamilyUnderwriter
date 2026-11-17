@@ -3,7 +3,7 @@
 #
 # The launchd job on the founder's Mac is the primary and handles the normal case.
 # This covers the one case it cannot: the Mac being off or off-network for a week
-# straight. Runs ~12h out of phase with launchd (which fires 09:20 local / 12:20 UTC).
+# straight. launchd fires 4x/day (03:20/09:20/15:20/21:20 local) when the Mac is awake.
 #
 # No secrets. The script falls back to the anon key in static/app.js, which is a
 # public client credential already shipped to every browser. Costs 2 HTTPS requests
@@ -12,7 +12,8 @@
 # CAVEAT worth knowing: GitHub disables `schedule` triggers in a repository with no
 # commit activity for 60 days, and emails the repo owner when it does. This repo is
 # dormant between feature pushes, so expect that mail eventually — re-enable from the
-# Actions tab in one click, or push any commit. The launchd job is unaffected.
+# Actions tab in one click (a push alone does NOT re-enable it; it only resets the 60-day
+# clock). The launchd job is unaffected. It went disabled on 2026-11-10 (RAM-2684).
 name: Supabase keepalive
 
 on:

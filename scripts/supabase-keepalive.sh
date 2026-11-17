@@ -6,8 +6,8 @@
 # mailing a "scheduled to be paused" warning weekly. One small API round-trip per
 # day resets that 7-day clock.
 #
-# Runs unattended via launchd (com.maplesyrupmoney.supabase-keepalive), daily at
-# 09:20 local. Costs: 2 HTTPS requests/day and a few KB of egress — nothing
+# Runs unattended via launchd (com.maplesyrupmoney.supabase-keepalive), 4x/day at
+# 03:20/09:20/15:20/21:20 local. Costs: ~16 HTTPS requests/day and a few KB of egress — nothing
 # measurable against the Free plan's 5 GB egress / 500 MB database allowance.
 # Consumes zero agent tokens: no model is in the loop.
 #
@@ -50,11 +50,17 @@ if [ -z "$ANON_KEY" ] && [ -r "$APP_JS" ]; then
 fi
 [ -n "$ANON_KEY" ] || fail "no anon key: \$SUPABASE_ANON_KEY unset and $APP_JS unreadable"
 
-# 1. PostgREST -> Postgres. RLS returns [] for anon, but the query really executes,
-#    which is what makes this count as database activity rather than a cached 200.
-rest_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
-  -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${ANON_KEY}" \
-  "${BASE}/rest/v1/saved_properties?select=id&limit=1")"
+# 1. PostgREST -> Postgres. RLS returns [] for anon, but the query really executes.
+#    Three SELECTs per run, not one (RAM-2684): with one REST request/day Supabase
+#    still mailed "not sufficient activity" on 2026-11-16, so one is below its
+#    unpublished threshold. Any non-200 among the three fails the run.
+rest_code=200
+for _ in 1 2 3; do
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+    -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${ANON_KEY}" \
+    "${BASE}/rest/v1/saved_properties?select=id&limit=1")"
+  [ "$code" = "200" ] || rest_code="$code"
+done
 
 # 2. GoTrue. Second independent service on the project, so a single service being
 #    down does not look like the whole project going quiet.
