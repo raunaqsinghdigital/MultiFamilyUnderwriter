@@ -12,8 +12,8 @@
 # CAVEAT worth knowing: GitHub disables `schedule` triggers in a repository with no
 # commit activity for 60 days, and emails the repo owner when it does. This repo is
 # dormant between feature pushes, so expect that mail eventually — re-enable from the
-# Actions tab in one click (a push alone does NOT re-enable it; it only resets the 60-day
-# clock). The launchd job is unaffected. It went disabled on 2026-11-10 (RAM-2684).
+# Actions tab in one click, or push any commit (measured 2026-11-17: a push to main took it
+# from disabled_inactivity back to active). The launchd job is unaffected. RAM-2684.
 name: Supabase keepalive
 
 on:
